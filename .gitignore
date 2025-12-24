@@ -1,0 +1,9 @@
+# Ignore Python virtual environment
+
+venv
+node_modules
+
+dist
+build
+bin/stealth-backend/_internal
+bin
