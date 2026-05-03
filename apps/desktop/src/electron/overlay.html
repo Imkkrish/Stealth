@@ -991,9 +991,11 @@
                     <line x1="12" y1="16" x2="12" y2="12" />
                     <line x1="12" y1="8" x2="12.01" y2="8" />
                 </svg>
-                <h3>God Mode Ready</h3>
-                <p>Drag this window anywhere.<br>Open LeetCode, GitHub, or VS Code.<br><br><strong>Ghost Mode:</strong>
-                    Click the lock icon.<br><strong>Exit Ghost:</strong> Press <kbd>⌘⇧L</kbd></p>
+                <h3>Stealth Ready</h3>
+                <p>Add your API key in the setup dialog to get started.<br>
+                Once configured, open LeetCode, GitHub, or VS Code.<br><br>
+                <strong>Ghost Mode:</strong> Click the lock icon or <kbd>⌘⇧L</kbd><br>
+                <strong>Capture:</strong> <kbd>⌘⌥C</kbd> or click the eye icon</p>
             </div>
         </div>
 
@@ -1460,11 +1462,16 @@
                 console.log('Connected to backend');
                 connectionAttempts = 0;
                 statusDot.className = 'status-dot connected';
-                statusText.textContent = 'Active';
                 transcriptionHeader.classList.add('active');
                 // If the user clicked Save / Test before the backend was up,
                 // their action was queued — flush it now.
                 flushPendingSetup();
+                // Show correct status based on config state
+                if (apiKeyMissing) {
+                    statusText.textContent = 'Connected — setup required';
+                } else {
+                    statusText.textContent = 'Active';
+                }
             });
 
             socket.on('disconnect', () => {
@@ -1818,9 +1825,29 @@
         // ============ INITIALIZATION ============
         console.log('Stealth UI loaded');
         statusDot.className = 'status-dot processing';
-        statusText.textContent = 'Starting...';
+        statusText.textContent = 'Starting backend...';
 
         setGhostMode(false);
+
+        // Check config immediately on load — if not configured, show setup
+        // modal right away so the user sees it while the backend is booting.
+        // This avoids the awkward "Active" -> "oh wait, need key" transition.
+        (async () => {
+            try {
+                const cfg = await ipcRenderer.invoke('get-config-status');
+                if (!cfg || !cfg.configured) {
+                    console.log('[init] Not configured — showing setup modal');
+                    statusDot.className = 'status-dot';
+                    statusText.textContent = 'Setup required';
+                    showSetupModal();
+                } else {
+                    console.log('[init] Already configured:', cfg.provider, cfg.model);
+                    statusText.textContent = 'Starting backend...';
+                }
+            } catch (err) {
+                console.error('[init] Config check failed:', err);
+            }
+        })();
     </script>
 </body>
 
