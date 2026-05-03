@@ -1,9 +1,40 @@
-# Ignore Python virtual environment
+# Stealth monorepo .gitignore
 
-venv
-node_modules
+# ----- Secrets / per-developer config -----
+.env
+.env.local
+*.env
 
-dist
-build
-bin/stealth-backend/_internal
-bin
+# ----- macOS -----
+.DS_Store
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ----- Node / Electron -----
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# ----- Generated build outputs (apps/desktop) -----
+# PyInstaller bundle that's only meaningful per-build.
+apps/desktop/bin/
+# electron-builder output dirs.
+apps/desktop/dist/
+apps/desktop/build/
+# The packaged .app should never be tracked — rebuild it.
+apps/desktop/Stealth.app/
+Stealth.app/
+
+# ----- Editor artifacts -----
+.idea/
+.vscode/
+*.swp
+
+# ----- Plan + scratch (kept locally) -----
+.claude/

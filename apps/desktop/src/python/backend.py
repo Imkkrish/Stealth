@@ -38,6 +38,11 @@ license_key = user_config.get("license", "")
 api_key = user_config.get("api_key", "")
 provider_name = user_config.get("provider", "")
 model_name = user_config.get("model", "")
+# DSA model — falls back to provider default if missing in stored config (back-compat).
+model_dsa_name = user_config.get(
+    "model_dsa",
+    config_store.DEFAULT_DSA_MODELS.get(provider_name, "") if provider_name else "",
+)
 language_pref = user_config.get("language", config_store.DEFAULT_LANGUAGE)
 interview_context_pref = user_config.get("interview_context", "")
 resume_text = config_store.get_resume_text()
@@ -289,6 +294,7 @@ async def connect_server() -> tuple[bool, str]:
         provider=provider_name,
         api_key=api_key,
         model=model_name,
+        model_dsa=model_dsa_name,
         resume_text=resume_text,
         language=language_pref,
         interview_context=interview_context_pref,
@@ -1222,7 +1228,7 @@ async def save_setup(sid, data):
 
     Replies via 'setup_saved' with {success, error?, resume_chars?, provider?, model?}.
     """
-    global server_url, license_key, api_key, provider_name, model_name
+    global server_url, license_key, api_key, provider_name, model_name, model_dsa_name
     global language_pref, interview_context_pref, resume_text
 
     try:
@@ -1230,6 +1236,7 @@ async def save_setup(sid, data):
         provider = d.get("provider", "").strip()
         key = d.get("api_key", "").strip()
         model = d.get("model", "").strip()
+        model_dsa = d.get("model_dsa", "").strip()
         srv_url = d.get("server_url", "").strip()
         lic = d.get("license", "").strip()
         lang = d.get("language", "").strip() or config_store.DEFAULT_LANGUAGE
@@ -1259,13 +1266,15 @@ async def save_setup(sid, data):
         # Persist config
         cfg = config_store.save_config(
             server_url=srv_url, license=lic, provider=provider, api_key=key,
-            model=model, language=lang, interview_context=ictx,
+            model=model, model_dsa=model_dsa,
+            language=lang, interview_context=ictx,
         )
         server_url = cfg["server_url"]
         license_key = cfg["license"]
         api_key = cfg["api_key"]
         provider_name = cfg["provider"]
         model_name = cfg["model"]
+        model_dsa_name = cfg["model_dsa"]
         language_pref = cfg["language"]
         interview_context_pref = cfg["interview_context"]
 
@@ -1275,11 +1284,12 @@ async def save_setup(sid, data):
             await sio.emit('setup_saved', {'success': False, 'error': f'Server connect failed: {err}'}, to=sid)
             return
 
-        print(f"✅ Setup saved: server={server_url}, {provider_name}/{model_name} (resume: {resume_chars} chars)")
+        print(f"✅ Setup saved: server={server_url}, {provider_name}/{model_name} (DSA: {model_dsa_name}) (resume: {resume_chars} chars)")
         await sio.emit('setup_saved', {
             'success': True,
             'provider': provider_name,
             'model': model_name,
+            'model_dsa': model_dsa_name,
             'resume_chars': resume_chars,
         }, to=sid)
     except Exception as e:
@@ -1341,7 +1351,7 @@ async def reload_api_key(sid, data):
 
     Triggered after the frontend saves new config.
     """
-    global server_url, license_key, api_key, provider_name, model_name
+    global server_url, license_key, api_key, provider_name, model_name, model_dsa_name
     global language_pref, interview_context_pref, resume_text
 
     cfg = config_store.load_config()
@@ -1350,6 +1360,10 @@ async def reload_api_key(sid, data):
     api_key = cfg.get("api_key", "")
     provider_name = cfg.get("provider", "")
     model_name = cfg.get("model", "")
+    model_dsa_name = cfg.get(
+        "model_dsa",
+        config_store.DEFAULT_DSA_MODELS.get(provider_name, "") if provider_name else "",
+    )
     language_pref = cfg.get("language", config_store.DEFAULT_LANGUAGE)
     interview_context_pref = cfg.get("interview_context", "")
     resume_text = config_store.get_resume_text()
@@ -1360,8 +1374,8 @@ async def reload_api_key(sid, data):
 
     ok, err = await connect_server()
     if ok:
-        print(f"🔑 Reconnected to server ({provider_name}/{model_name})")
-        await sio.emit('api_key_saved', {'success': True, 'provider': provider_name, 'model': model_name}, to=sid)
+        print(f"🔑 Reconnected to server ({provider_name}/{model_name} + DSA {model_dsa_name})")
+        await sio.emit('api_key_saved', {'success': True, 'provider': provider_name, 'model': model_name, 'model_dsa': model_dsa_name}, to=sid)
     else:
         await sio.emit('api_key_saved', {'success': False, 'error': err}, to=sid)
 

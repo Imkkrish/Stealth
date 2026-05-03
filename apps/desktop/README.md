@@ -1,110 +1,104 @@
-# 👻 Stealth - Ghost Overlay
+# Stealth — Desktop Client (Mac)
 
-An invisible interview helper that floats over your screen, listens to audio, transcribes it, and provides AI-generated answers in real-time.
+The Mac client for Stealth: a stealthy Electron overlay that captures audio + screen, transcribes locally with `faster-whisper`, and forwards everything to the Stealth server (`services/stealth-server/`) for streaming LLM answers.
 
-**INVISIBLE to screen capture software (Zoom/Teams/Screen Sharing) but VISIBLE to you.**
+> **Invisible to screen capture (Zoom/Teams/Meet) but visible to you.**
 
-## 🚀 Quick Start
+## Quick start (dev)
 
-### Option 1: Double-Click App (Recommended)
-1. Double-click **`Stealth.app`** in Finder
-2. The overlay will appear in the top-right corner
-3. Click ▶ **Start** to begin listening
-
-### Option 2: Terminal
 ```bash
-./Stealth.command
+cd apps/desktop
+
+# One-time setup
+./start.sh                    # creates venv, installs Python + Node deps
+
+# Run
+npm run start-electron        # spawns the Python backend automatically
 ```
 
-## 🎛️ Controls
+On first launch, the overlay's **Setup modal** appears. Fill in:
+
+- **Server URL** — the deployed `*.run.app` (or `http://localhost:8080` for local dev).
+- **License key** — the shared secret your server admin gave you.
+- **Provider / Model / API Key** — your own Gemini, OpenAI, or Anthropic key (BYOK).
+- **Preferred coding language** — Python, C++, Java, …
+- **Interview context** *(optional)* — e.g. "Senior backend SWE at Stripe, 60-min coding round."
+- **Resume** *(optional)* — PDF / DOCX / TXT.
+
+Click **Test connection** to validate, then **Save & start**. Config is written to `~/.stealth/config.json` and `~/.stealth/resume.txt` — uninstalling the app and deleting `~/.stealth/` removes everything.
+
+## Controls
 
 | Button | Action |
 |--------|--------|
-| ▶ Start | Begin listening and transcribing |
+| ▶ Start | Begin listening + transcribing |
 | ⬛ Stop | Stop the backend |
 | 📷 Vision | Capture and analyze screen |
 | ✕ Quit | Close the application |
+| ⌘⇧L | Toggle Ghost Mode (panic) |
+| ⌘⇧T | Toggle debug console |
+| ⌘⌥C | Manual screen capture |
 
-## 🔒 Stealth Features
+## Stealth features
 
-- **Hidden from Dock**: App doesn't appear in macOS Dock
-- **Invisible to Screen Share**: Uses `setContentProtection(true)`
-- **Click-through**: Window lets you click through it; hover the bar to interact
-- **Always on Top**: Stays visible over all windows
+- **Hidden from Dock** — `LSUIElement: true`.
+- **Invisible to screen share** — `setContentProtection(true)`.
+- **Click-through** — window lets you click through; hover the bar to interact.
+- **Always on top** — stays visible over all windows.
 
-## 🎤 Audio Setup (Important!)
+## Audio setup (important)
 
-### To capture system audio (what the interviewer says):
+To capture **system audio** (what the interviewer says):
 
-1. **Install BlackHole**:
+1. Install BlackHole:
    ```bash
    brew install blackhole-2ch
    ```
+2. Open **Audio MIDI Setup** → click **+** → "Create Multi-Output Device" → check both **BlackHole 2ch** and your speakers → name it "Multi-Output."
+3. **System Settings** → **Sound** → **Output** → select "Multi-Output Device."
+4. Restart Stealth.
 
-2. **Create Multi-Output Device**:
-   - Open **Audio MIDI Setup** (Spotlight search)
-   - Click **+** → "Create Multi-Output Device"
-   - Check both **BlackHole 2ch** AND your speakers
-   - Name it "Multi-Output"
+Without BlackHole the app falls back to your microphone.
 
-3. **Set as Output**:
-   - Go to **System Preferences** → **Sound** → **Output**
-   - Select "Multi-Output Device"
+## Privacy notification
 
-4. **Restart Stealth**
+macOS shows a microphone indicator while recording — system-level, can't be disabled. The notification shows "Electron" or your terminal name, not "Stealth." The app itself stays hidden from the Dock; the overlay is invisible to screen recording.
 
-Without BlackHole, the app will use your microphone instead.
-
-## ⚠️ About Privacy Notifications
-
-macOS will show a microphone indicator when the app is recording. This is a system-level privacy feature that cannot be disabled. However:
-
-- The notification shows "Electron" or your terminal name, not "Stealth"
-- The app itself is hidden from the Dock
-- The overlay is invisible to screen recording
-
-## 📁 Project Structure
-
-```
-Stealth/
-├── Stealth.app/           # Double-click to launch
-├── Stealth.command        # Alternative launcher
-├── src/
-│   ├── electron/          # Frontend (overlay)
-│   │   ├── main.js
-│   │   └── overlay.html
-│   └── python/            # Backend (AI & audio)
-│       └── backend.py
-├── .env                   # Your API key
-└── venv/                  # Python environment
-```
-
-## 🔧 Troubleshooting
-
-### "Backend not starting"
-- Ensure you ran `./start.sh` once to install dependencies
-- Check that `venv/` exists
-
-### "No audio detected"
-- Check your input device in System Preferences
-- Ensure BlackHole is set up for system audio
-
-### "LLM Error 404"
-- Your API key may be invalid or have restrictions
-- Try regenerating your Gemini API key
-
-## 🛠️ Development
+## Build a packaged `.app`
 
 ```bash
-# Install all dependencies
-./start.sh
-
-# Run manually (for debugging)
-source venv/bin/activate
-python3 src/python/backend.py  # In one terminal
-npm run start-electron          # In another terminal
+cd apps/desktop
+npm run build-python          # PyInstaller bundle of the Python backend
+npm run dist                  # electron-builder DMG/ZIP in dist/
 ```
 
----
+The PyInstaller bundle lands in `apps/desktop/bin/stealth-backend/` and is included as `extraResources` in the packaged app. `bin/` and `dist/` are gitignored — rebuild on every release.
 
-**Good luck with your interview! 🍀**
+## Layout
+
+```
+apps/desktop/
+├── package.json
+├── start.sh                  # dev: create venv + install deps
+├── build_python.sh           # PyInstaller bundle of the backend
+├── Stealth.command           # double-click launcher (dev)
+├── entitlements.mac.plist
+├── build-resources/          # icon, etc.
+├── context/                  # legacy placeholder dir
+└── src/
+    ├── electron/             # main.js, overlay.html
+    └── python/
+        ├── backend.py        # Electron-spawned local agent
+        ├── server_client.py  # Socket.IO client → GCP server
+        ├── stt.py            # faster-whisper wrapper
+        ├── config_store.py   # ~/.stealth/config.json + resume.txt
+        ├── resume_parser.py  # pypdf + python-docx
+        └── requirements.txt
+```
+
+## Troubleshooting
+
+- **"Backend not starting"** — ensure `./start.sh` ran once. Check `apps/desktop/venv/` exists.
+- **"No audio detected"** — verify input device in System Preferences. For system audio, make sure BlackHole + Multi-Output is set as your output.
+- **Setup modal says "connect failed"** — wrong server URL or wrong license. The license is the `STEALTH_SHARED_SECRET` your server admin set.
+- **"build failed: ..."** in setup — bad provider key. Generate a new one at the provider's console.

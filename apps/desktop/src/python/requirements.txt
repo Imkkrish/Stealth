@@ -1,33 +1,31 @@
-# Project Stealth - God Mode Build
-# PINNED VERSIONS for Python 3.9 Compatibility
+# Stealth client v2 — light. No LLM SDKs (server handles those), no torch.
 
-# Core async framework
+# Async + Socket.IO server (overlay <-> Python) and client (Python -> GCP)
 aiohttp==3.9.5
-python-socketio==5.11.2
-python-engineio==4.9.0
+python-socketio[asyncio_client]>=5.11.0
+python-engineio>=4.9.0
 
-# Audio capture (sounddevice - CoreAudio compatible)
+# Local STT (faster-whisper / CTranslate2 — no PyTorch)
+faster-whisper>=1.0.0
+
+# Audio capture
 sounddevice
 
-# Transcription
-openai-whisper
-
-# AI Models (upgraded for multimodal)
-google-generativeai>=0.8.0
+# Resume parsing (parsed once locally, parsed text sent to server)
+pypdf>=4.0.0
+python-docx>=1.0.0
 
 # Vision/Screen capture
 mss==9.0.1
 Pillow
 
-# macOS Window Management (for Window Watcher)
+# macOS Window Management (Window Watcher)
 pyobjc-framework-Quartz
 pyobjc-framework-Cocoa
 pyobjc-framework-ApplicationServices
 
 # Data processing
-numpy<2
-scipy
+numpy
 
 # Utilities
-python-dotenv
 certifi

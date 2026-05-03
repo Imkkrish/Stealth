@@ -6,7 +6,8 @@ Schema for ~/.stealth/config.json:
   "license":            "<shared secret pasted by user>",
   "provider":           "gemini" | "openai" | "anthropic",
   "api_key":            "...",
-  "model":              "<provider-specific model id>",
+  "model":              "<fast/general model — used for chit-chat, MCQ, conceptual>",
+  "model_dsa":          "<slower/stronger model — used when server classifies the request as a coding/DSA problem>",
   "language":           "Python" (default),
   "interview_context":  "Senior backend SWE at Stripe, 60-min coding round" (optional)
 }
@@ -22,9 +23,20 @@ CONFIG_DIR = Path.home() / ".stealth"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 RESUME_PATH = CONFIG_DIR / "resume.txt"
 
+# Default model used for general / conversational requests — fast, cheap, good
+# enough for chit-chat / MCQ / conceptual.
 DEFAULT_MODELS = {
-    "gemini": "gemini-2.5-flash",
+    "gemini": "gemini-3-flash-preview",
     "openai": "gpt-4o",
+    "anthropic": "claude-haiku-4-5-20251001",
+}
+
+# Default model used when the server's classifier decides the request is a
+# coding / DSA problem — slower but stronger reasoning. User can override
+# either field in the setup modal.
+DEFAULT_DSA_MODELS = {
+    "gemini": "gemini-3.1-pro-preview",
+    "openai": "gpt-4o",          # `o1` is opt-in via override
     "anthropic": "claude-sonnet-4-6",
 }
 
@@ -59,6 +71,7 @@ def save_config(
     provider: str,
     api_key: str,
     model: str = "",
+    model_dsa: str = "",
     language: str = "",
     interview_context: str = "",
 ) -> dict:
@@ -76,6 +89,7 @@ def save_config(
         "provider": provider,
         "api_key": api_key.strip(),
         "model": (model or DEFAULT_MODELS[provider]).strip(),
+        "model_dsa": (model_dsa or DEFAULT_DSA_MODELS[provider]).strip(),
         "language": (language or DEFAULT_LANGUAGE).strip(),
         "interview_context": (interview_context or "").strip(),
     }

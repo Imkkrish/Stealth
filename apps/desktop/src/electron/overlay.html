@@ -736,30 +736,150 @@
         .modal-error.visible {
             display: block;
         }
+
+        .modal-status {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin: -8px 0 12px;
+            min-height: 14px;
+        }
+
+        .modal-status.ok { color: var(--accent-green, #5eda94); }
+        .modal-status.bad { color: var(--accent-red); }
+
+        .modal-card.wide {
+            max-width: 420px;
+        }
+
+        .modal-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-row .modal-input { margin-bottom: 0; }
+
+        .modal-label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .modal-select {
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 12px;
+            outline: none;
+            margin-bottom: 14px;
+            cursor: pointer;
+        }
+
+        .modal-select:focus { border-color: var(--accent-blue); }
+
+        .modal-file {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px dashed var(--border-color);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 14px;
+            cursor: pointer;
+            transition: border-color 0.2s ease;
+        }
+
+        .modal-file:hover { border-color: var(--accent-blue); }
+
+        .modal-file .filename {
+            color: var(--text-primary);
+            margin-left: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .modal-link-row {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+        }
     </style>
 </head>
 
 <body>
-    <!-- API Key Modal -->
-    <div class="modal-overlay" id="api-key-modal">
-        <div class="modal-card">
+    <!-- Setup Modal: provider + key + (optional) resume -->
+    <div class="modal-overlay" id="setup-modal">
+        <div class="modal-card wide">
             <div class="modal-header">
                 <svg viewBox="0 0 24 24">
                     <path
                         d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
                 </svg>
-                <h2>API Key Required</h2>
+                <h2>Set up Stealth</h2>
             </div>
             <div class="modal-body">
-                <p>Enter your Gemini API key to enable AI features.<br>
-                    Get one free at <a href="#" id="api-link">Google AI Studio</a></p>
-                <input type="password" class="modal-input" id="api-key-input" placeholder="AIzaSy..." autocomplete="off"
-                    spellcheck="false">
-                <p class="modal-error" id="api-key-error">Invalid API key format</p>
+                <p>Stealth talks to a small server we host — it never sees your key. The key + resume stay on this Mac at <code>~/.stealth/</code>.</p>
+
+                <label class="modal-label" for="setup-server-url">Server URL</label>
+                <input type="text" class="modal-input" id="setup-server-url" placeholder="https://stealth-server-xxxxx.run.app" autocomplete="off" spellcheck="false">
+
+                <label class="modal-label" for="setup-license">License key</label>
+                <input type="password" class="modal-input" id="setup-license" placeholder="shared secret your friend gave you" autocomplete="off" spellcheck="false">
+
+                <label class="modal-label" for="setup-provider">Provider</label>
+                <select class="modal-select" id="setup-provider">
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic (Claude)</option>
+                </select>
+
+                <label class="modal-label" for="setup-model">Default model (fast — chit-chat, MCQs, conceptual)</label>
+                <input type="text" class="modal-input" id="setup-model" autocomplete="off" spellcheck="false">
+
+                <label class="modal-label" for="setup-model-dsa">DSA model (slower / stronger — coding problems)</label>
+                <input type="text" class="modal-input" id="setup-model-dsa" autocomplete="off" spellcheck="false">
+
+                <label class="modal-label" for="setup-key">API Key</label>
+                <input type="password" class="modal-input" id="setup-key" placeholder="paste your key" autocomplete="off" spellcheck="false">
+
+                <p class="modal-link-row">
+                    Get a key:
+                    <a href="#" data-link="gemini">Gemini</a> ·
+                    <a href="#" data-link="openai">OpenAI</a> ·
+                    <a href="#" data-link="anthropic">Anthropic</a>
+                </p>
+
+                <label class="modal-label" for="setup-language">Preferred coding language</label>
+                <input type="text" class="modal-input" id="setup-language" placeholder="Python" autocomplete="off" spellcheck="false">
+
+                <label class="modal-label" for="setup-interview">Interview context (optional)</label>
+                <textarea class="modal-input" id="setup-interview" rows="2" placeholder="e.g. Senior backend SWE at Stripe, 60-min coding round" spellcheck="false"></textarea>
+
+                <label class="modal-label">Resume (optional — used to tailor answers)</label>
+                <div class="modal-file" id="setup-resume-picker">
+                    <span>📄 Choose .pdf / .docx / .txt</span>
+                    <span class="filename" id="setup-resume-name"></span>
+                </div>
+
+                <p class="modal-status" id="setup-status"></p>
+                <p class="modal-error" id="setup-error">Something went wrong</p>
             </div>
             <div class="modal-buttons">
-                <button class="modal-btn secondary" id="api-key-skip">Skip</button>
-                <button class="modal-btn primary" id="api-key-save">Save Key</button>
+                <button class="modal-btn secondary" id="setup-test">Test connection</button>
+                <button class="modal-btn primary" id="setup-save">Save &amp; start</button>
             </div>
         </div>
     </div>
@@ -895,13 +1015,33 @@
         const transcriptContainer = document.getElementById('transcript-container');
         const transcriptionHeader = document.getElementById('transcription-header');
 
-        // API Key Modal elements
-        const apiKeyModal = document.getElementById('api-key-modal');
-        const apiKeyInput = document.getElementById('api-key-input');
-        const apiKeyError = document.getElementById('api-key-error');
-        const apiKeySaveBtn = document.getElementById('api-key-save');
-        const apiKeySkipBtn = document.getElementById('api-key-skip');
-        const apiLink = document.getElementById('api-link');
+        // ============ Setup Modal elements ============
+        const setupModal = document.getElementById('setup-modal');
+        const setupServerUrl = document.getElementById('setup-server-url');
+        const setupLicense = document.getElementById('setup-license');
+        const setupProvider = document.getElementById('setup-provider');
+        const setupModel = document.getElementById('setup-model');
+        const setupModelDsa = document.getElementById('setup-model-dsa');
+        const setupKey = document.getElementById('setup-key');
+        const setupLanguage = document.getElementById('setup-language');
+        const setupInterview = document.getElementById('setup-interview');
+        const setupResumePicker = document.getElementById('setup-resume-picker');
+        const setupResumeName = document.getElementById('setup-resume-name');
+        const setupStatus = document.getElementById('setup-status');
+        const setupError = document.getElementById('setup-error');
+        const setupSaveBtn = document.getElementById('setup-save');
+        const setupTestBtn = document.getElementById('setup-test');
+
+        // Per-provider auto-fill: `model` is the fast/general default; `model_dsa`
+        // is the stronger model the server routes to when the request looks like
+        // a coding/DSA problem.
+        const PROVIDER_DEFAULTS = {
+            gemini:    { model: 'gemini-3-flash-preview',    model_dsa: 'gemini-3.1-pro-preview', placeholder: 'AIzaSy...',  keyDocs: 'https://aistudio.google.com/app/apikey' },
+            openai:    { model: 'gpt-4o',                    model_dsa: 'gpt-4o',                 placeholder: 'sk-...',     keyDocs: 'https://platform.openai.com/api-keys' },
+            anthropic: { model: 'claude-haiku-4-5-20251001', model_dsa: 'claude-sonnet-4-6',      placeholder: 'sk-ant-...', keyDocs: 'https://console.anthropic.com/settings/keys' },
+        };
+
+        let setupResumePath = null;
 
         // ============ STATE ============
         let socket = null;
@@ -909,86 +1049,148 @@
         let autoWatchEnabled = true;
         let apiKeyMissing = false;
 
-        // ============ API KEY MODAL ============
-        function showApiKeyModal() {
-            apiKeyModal.classList.add('visible');
-            apiKeyInput.focus();
+        function applyProviderDefaults() {
+            const cfg = PROVIDER_DEFAULTS[setupProvider.value] || PROVIDER_DEFAULTS.gemini;
+            setupModel.value = cfg.model;
+            setupModelDsa.value = cfg.model_dsa;
+            setupKey.placeholder = cfg.placeholder;
+        }
+
+        function setSetupStatus(msg, kind) {
+            setupStatus.textContent = msg || '';
+            setupStatus.classList.remove('ok', 'bad');
+            if (kind === 'ok') setupStatus.classList.add('ok');
+            else if (kind === 'bad') setupStatus.classList.add('bad');
+            setupError.classList.remove('visible');
+        }
+
+        function setSetupError(msg) {
+            setupError.textContent = msg || 'Something went wrong';
+            setupError.classList.add('visible');
+            setupStatus.textContent = '';
+        }
+
+        function showSetupModal() {
+            applyProviderDefaults();
+            setupModal.classList.add('visible');
+            setupKey.focus();
             apiKeyMissing = true;
         }
 
-        function hideApiKeyModal() {
-            apiKeyModal.classList.remove('visible');
-            apiKeyError.classList.remove('visible');
+        function hideSetupModal() {
+            setupModal.classList.remove('visible');
+            setupError.classList.remove('visible');
+            setupStatus.textContent = '';
         }
 
-        apiKeySaveBtn.addEventListener('click', () => {
-            const key = apiKeyInput.value.trim();
-            if (!key || !key.startsWith('AIza')) {
-                apiKeyError.classList.add('visible');
-                apiKeyInput.focus();
+        setupProvider.addEventListener('change', () => {
+            applyProviderDefaults();
+            setSetupStatus('');
+        });
+
+        setupKey.addEventListener('input', () => {
+            setupError.classList.remove('visible');
+        });
+
+        setupResumePicker.addEventListener('click', async () => {
+            try {
+                const filePath = await ipcRenderer.invoke('pick-resume-file');
+                if (!filePath) return;
+                setupResumePath = filePath;
+                const baseName = filePath.split('/').pop();
+                setupResumeName.textContent = baseName;
+                setSetupStatus(`Resume selected: ${baseName}`, 'ok');
+            } catch (err) {
+                setSetupError(`Could not pick file: ${err.message}`);
+            }
+        });
+
+        // "Get a key" inline links
+        document.querySelectorAll('[data-link]').forEach((el) => {
+            el.addEventListener('click', (e) => {
+                e.preventDefault();
+                const which = el.getAttribute('data-link');
+                const url = (PROVIDER_DEFAULTS[which] || {}).keyDocs;
+                if (url) require('electron').shell.openExternal(url);
+            });
+        });
+
+        function collectSetupPayload() {
+            const server_url = setupServerUrl.value.trim();
+            const license = setupLicense.value.trim();
+            const provider = setupProvider.value;
+            const model = setupModel.value.trim();
+            const model_dsa = setupModelDsa.value.trim() || model;
+            const apiKey = setupKey.value.trim();
+            const language = setupLanguage.value.trim() || 'Python';
+            const interview_context = setupInterview.value.trim();
+            if (!server_url) { setSetupError('Server URL is required'); setupServerUrl.focus(); return null; }
+            if (!license)    { setSetupError('License key is required'); setupLicense.focus(); return null; }
+            if (!apiKey)     { setSetupError('API key is required'); setupKey.focus(); return null; }
+            if (!model)      { setSetupError('Default model is required'); setupModel.focus(); return null; }
+            return {
+                server_url, license, provider, model, model_dsa,
+                api_key: apiKey,
+                language, interview_context,
+                resume_path: setupResumePath,
+            };
+        }
+
+        setupTestBtn.addEventListener('click', () => {
+            const payload = collectSetupPayload();
+            if (!payload) return;
+            if (!socket || !socket.connected) {
+                setSetupError('Backend not connected yet — wait a moment.');
                 return;
             }
+            setSetupStatus('Testing connection…');
+            setupTestBtn.disabled = true;
+            socket.emit('test_connection', {
+                server_url: payload.server_url,
+                license: payload.license,
+                provider: payload.provider,
+                api_key: payload.api_key,
+                model: payload.model,
+            });
+            socket.once('test_connection_result', (res) => {
+                setupTestBtn.disabled = false;
+                if (res && res.success) {
+                    setSetupStatus('Connection OK ✓', 'ok');
+                } else {
+                    setSetupError(`Test failed: ${(res && res.error) || 'unknown error'}`);
+                }
+            });
+        });
 
-            // Save the key via IPC
-            ipcRenderer.send('save-api-key', key);
-
-            // Show status
-            statusText.textContent = 'API key saved! Configuring...';
-
-            // Tell backend to reload the API key
-            if (socket && socket.connected) {
-                socket.emit('reload_api_key', {});
-
-                // Listen for success/failure
-                socket.once('api_key_saved', (data) => {
-                    if (data.success) {
-                        hideApiKeyModal();
-                        statusText.textContent = 'API key configured!';
-                        apiKeyMissing = false;
-                        addSolution('**API Key Saved!** ✅\n\nYour Gemini API key has been configured. The app is now ready to use.');
-                    } else {
-                        statusText.textContent = 'Error - restarting...';
-                        // Fall back to restart if reload fails
-                        setTimeout(() => {
-                            ipcRenderer.send('stop-backend');
-                            setTimeout(() => {
-                                ipcRenderer.send('start-backend');
-                                hideApiKeyModal();
-                            }, 1000);
-                        }, 500);
-                    }
-                });
-            } else {
-                // Socket not connected, restart backend
-                hideApiKeyModal();
-                statusText.textContent = 'API key saved! Restarting...';
-                setTimeout(() => {
-                    ipcRenderer.send('stop-backend');
-                    setTimeout(() => {
-                        ipcRenderer.send('start-backend');
-                    }, 1000);
-                }, 500);
+        setupSaveBtn.addEventListener('click', () => {
+            const payload = collectSetupPayload();
+            if (!payload) return;
+            if (!socket || !socket.connected) {
+                setSetupError('Backend not connected yet — wait a moment.');
+                return;
             }
+            setSetupStatus('Saving…');
+            setupSaveBtn.disabled = true;
+            socket.emit('save_setup', payload);
+            socket.once('setup_saved', (res) => {
+                setupSaveBtn.disabled = false;
+                if (res && res.success) {
+                    hideSetupModal();
+                    apiKeyMissing = false;
+                    const dsaSuffix = res.model_dsa && res.model_dsa !== res.model ? ` / DSA: ${res.model_dsa}` : '';
+                    statusText.textContent = `Configured — ${res.provider} (${res.model}${dsaSuffix})`;
+                    const resumeLine = res.resume_chars ? `\n- Resume: ${res.resume_chars} chars loaded` : '';
+                    const dsaLine = res.model_dsa && res.model_dsa !== res.model ? `\n- DSA model: ${res.model_dsa}` : '';
+                    addSolution(`**Setup saved ✅**\n\n- Provider: ${res.provider}\n- Default model: ${res.model}${dsaLine}${resumeLine}\n\nYou can now use Stealth.`);
+                } else {
+                    setSetupError(`Save failed: ${(res && res.error) || 'unknown error'}`);
+                }
+            });
         });
 
-        apiKeySkipBtn.addEventListener('click', () => {
-            hideApiKeyModal();
-            addSolution('**API Key Skipped**\n\nSome features may not work without a Gemini API key.\n\nYou can add it later in the `.env` file.');
-        });
-
-        apiKeyInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                apiKeySaveBtn.click();
-            }
-        });
-
-        apiKeyInput.addEventListener('input', () => {
-            apiKeyError.classList.remove('visible');
-        });
-
-        apiLink.addEventListener('click', (e) => {
-            e.preventDefault();
-            require('electron').shell.openExternal('https://aistudio.google.com/app/apikey');
+        // Enter on the key field = Save
+        setupKey.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') setupSaveBtn.click();
         });
 
         // ============ GHOST MODE TOGGLE ============
@@ -1143,7 +1345,46 @@
                 showLoading();
             });
 
+            // Server-side notices (e.g. "answer already streaming" rejection from
+            // the single-flight guard). Visible in the status bar; does not
+            // disturb the in-flight streamingCard if one is running.
+            socket.on('error', (data) => {
+                const msg = (data && data.message) || 'unknown error';
+                statusDot.className = 'status-dot processing';
+                statusText.textContent = `⚠ ${msg}`;
+                setTimeout(() => {
+                    if (!isStreamingNow) {
+                        statusDot.className = 'status-dot connected';
+                        statusText.textContent = 'Active';
+                    }
+                }, 4000);
+            });
+
+            // Streamed-token path (preferred — emitted by the GCP server via the local backend).
+            socket.on('answer_chunk', (data) => {
+                if (!data || !data.token) return;
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = 'Streaming…';
+                appendSolutionChunk(data.token);
+            });
+
+            socket.on('answer_done', (data) => {
+                statusDot.className = 'status-dot connected';
+                if (data && data.model_used) {
+                    const route = data.route ? ` · ${data.route}` : '';
+                    statusText.textContent = `Active · ${data.model_used}${route}`;
+                } else {
+                    statusText.textContent = 'Active';
+                }
+                finalizeStreamedSolution(data && data.full_text);
+            });
+
+            // Non-streaming fallback (errors, legacy emit, "not connected" notices).
             socket.on('new_answer', (data) => {
+                if (isStreamingNow) {
+                    // The streamed answer is the source of truth — ignore the late legacy emit.
+                    return;
+                }
                 statusDot.className = 'status-dot connected';
                 statusText.textContent = 'Active';
                 addSolution(data.text);
@@ -1171,8 +1412,8 @@
             });
 
             socket.on('api_key_missing', () => {
-                console.log('API key missing - showing modal');
-                showApiKeyModal();
+                console.log('Provider not configured — showing setup modal');
+                showSetupModal();
             });
         }
 
@@ -1216,6 +1457,57 @@
             `;
 
             solutionsPanel.insertBefore(card, solutionsPanel.firstChild);
+
+            const cards = solutionsPanel.querySelectorAll('.solution-card');
+            if (cards.length > 8) cards[cards.length - 1].remove();
+        }
+
+        // ---- Streaming solution rendering ----
+        // Tokens arrive incrementally; we accumulate into one card and re-render
+        // markdown on each chunk. Cheap enough at typical token rates; if it
+        // ever feels janky, debounce parseMarkdown() to every ~50 ms.
+        let streamingCard = null;
+        let streamingBuffer = '';
+        let isStreamingNow = false;
+
+        function appendSolutionChunk(token) {
+            if (!streamingCard) {
+                const loading = document.getElementById('loading-card');
+                if (loading) loading.remove();
+                emptyState.style.display = 'none';
+
+                streamingCard = document.createElement('div');
+                streamingCard.className = 'solution-card streaming';
+                const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                streamingCard.innerHTML = `
+                    <div class="solution-header">
+                        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                        <span class="solution-title">Solution</span>
+                        <span class="solution-time">${time}</span>
+                    </div>
+                    <div class="solution-content"></div>
+                `;
+                solutionsPanel.insertBefore(streamingCard, solutionsPanel.firstChild);
+                streamingBuffer = '';
+                isStreamingNow = true;
+            }
+            streamingBuffer += token;
+            const contentEl = streamingCard.querySelector('.solution-content');
+            if (contentEl) contentEl.innerHTML = parseMarkdown(streamingBuffer);
+        }
+
+        function finalizeStreamedSolution(fullText) {
+            if (streamingCard) {
+                if (fullText) {
+                    streamingBuffer = fullText;
+                    const contentEl = streamingCard.querySelector('.solution-content');
+                    if (contentEl) contentEl.innerHTML = parseMarkdown(streamingBuffer);
+                }
+                streamingCard.classList.remove('streaming');
+                streamingCard = null;
+            }
+            streamingBuffer = '';
+            isStreamingNow = false;
 
             const cards = solutionsPanel.querySelectorAll('.solution-card');
             if (cards.length > 8) cards[cards.length - 1].remove();

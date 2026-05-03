@@ -7,20 +7,14 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-// =============================================================================
-// STEP 1: Load environment variables FIRST (before anything else)
-// =============================================================================
-try {
-    require('dotenv').config({ path: path.join(__dirname, '../../.env') });
-    console.log('✅ Environment variables loaded from .env');
-} catch (err) {
-    console.warn('⚠️  dotenv not installed or .env not found. Continuing without it.');
-}
+// Stealth v2 does not use a .env file at runtime. User config (server URL,
+// license, provider, key, language, interview context) lives in
+// ~/.stealth/config.json, managed by the Python backend.
 
 // =============================================================================
 // STEP 2: Import Electron with robust error handling
 // =============================================================================
-let app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer;
+let app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer, dialog;
 
 try {
     const electron = require('electron');
@@ -30,6 +24,7 @@ try {
     screen = electron.screen;
     globalShortcut = electron.globalShortcut;
     desktopCapturer = electron.desktopCapturer;
+    dialog = electron.dialog;
 } catch (err) {
     console.error('═══════════════════════════════════════════════════════════════');
     console.error('❌ CRITICAL ERROR: Failed to import Electron');
@@ -424,42 +419,46 @@ function createWindow() {
         }, 300);
     });
 
-    // Save API key to .env file
-    ipcMain.on('save-api-key', (event, apiKey) => {
-        const envPath = isDev
-            ? path.join(__dirname, '../../.env')
-            : path.join(process.resourcesPath, '.env');
-
+    // ---- Setup flow IPC ----
+    // Renderer → main.js: open a file dialog to pick a resume.
+    // Returns the absolute path or null if cancelled. The renderer then
+    // hands the path to the Python backend via socket.io ('save_setup'),
+    // which parses + saves it. Keeps main.js thin.
+    ipcMain.handle('pick-resume-file', async () => {
         try {
-            let envContent = '';
+            const result = await dialog.showOpenDialog(mainWindow, {
+                title: 'Select your resume',
+                properties: ['openFile'],
+                filters: [
+                    { name: 'Resume', extensions: ['pdf', 'docx', 'txt', 'md'] },
+                ],
+            });
+            if (result.canceled || result.filePaths.length === 0) return null;
+            return result.filePaths[0];
+        } catch (err) {
+            console.error('pick-resume-file failed:', err);
+            return null;
+        }
+    });
 
-            // Read existing .env if it exists
-            if (fs.existsSync(envPath)) {
-                envContent = fs.readFileSync(envPath, 'utf8');
-                // Remove existing GEMINI_API_KEY line
-                envContent = envContent
-                    .split('\n')
-                    .filter(line => !line.startsWith('GEMINI_API_KEY='))
-                    .join('\n');
+    // Read ~/.stealth/config.json from the renderer (without exposing the key).
+    // Used to decide whether to show the first-run setup modal.
+    ipcMain.handle('get-config-status', async () => {
+        try {
+            const home = require('os').homedir();
+            const cfgPath = path.join(home, '.stealth', 'config.json');
+            if (!fs.existsSync(cfgPath)) {
+                return { configured: false };
             }
-
-            // Add new key
-            if (envContent && !envContent.endsWith('\n')) {
-                envContent += '\n';
-            }
-            envContent += `GEMINI_API_KEY=${apiKey}\n`;
-
-            // Write back
-            fs.writeFileSync(envPath, envContent);
-            console.log('✅ API key saved to .env');
-
-            // Also set in current process environment
-            process.env.GEMINI_API_KEY = apiKey;
-
-            safeSend('api-key-saved', { success: true });
-        } catch (error) {
-            console.error('❌ Failed to save API key:', error);
-            safeSend('api-key-saved', { success: false, error: error.message });
+            const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            return {
+                configured: Boolean(raw.provider && raw.api_key),
+                provider: raw.provider || '',
+                model: raw.model || '',
+            };
+        } catch (err) {
+            console.error('get-config-status failed:', err);
+            return { configured: false };
         }
     });
 

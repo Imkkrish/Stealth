@@ -57,7 +57,9 @@ echo ""
 echo "[5/5] Building standalone binary..."
 echo "      This may take a few minutes..."
 
-# PyInstaller command with optimizations for macOS
+# PyInstaller command — Stealth v2 client
+# Hidden imports list reflects v2: faster-whisper local STT, Socket.IO client
+# (to GCP server) AND Socket.IO server (to overlay), no LLM SDKs on the client.
 "$PYTHON_PATH" -m PyInstaller \
     --clean \
     --noconfirm \
@@ -69,18 +71,26 @@ echo "      This may take a few minutes..."
     --console \
     --strip \
     --noupx \
-    --collect-all whisper \
+    --collect-all faster_whisper \
+    --collect-all ctranslate2 \
     --collect-all sounddevice \
-    --hidden-import=tiktoken_ext.openai_public \
-    --hidden-import=tiktoken_ext \
-    --hidden-import=engineio.async_drivers.aiohttp \
+    --hidden-import=faster_whisper \
+    --hidden-import=ctranslate2 \
     --hidden-import=socketio \
+    --hidden-import=engineio \
+    --hidden-import=engineio.async_drivers.aiohttp \
     --hidden-import=aiohttp \
     --hidden-import=PIL \
     --hidden-import=mss \
     --hidden-import=mss.darwin \
-    --hidden-import=google.generativeai \
+    --hidden-import=pypdf \
+    --hidden-import=docx \
     --hidden-import=certifi \
+    --hidden-import=config_store \
+    --hidden-import=server_client \
+    --hidden-import=stt \
+    --hidden-import=resume_parser \
+    --paths "$SCRIPT_DIR/src/python" \
     "$SCRIPT_DIR/src/python/backend.py"
 
 # Verify the build

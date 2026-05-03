@@ -19,11 +19,9 @@
   "devDependencies": {
     "concurrently": "^8.0.0",
     "electron": "^39.2.6",
-    "electron-builder": "^25.1.8",
-    "electron-packager": "^17.1.2"
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
     "socket.io-client": "^4.7.0"
   },
   "build": {
@@ -41,10 +39,6 @@
       {
         "from": "bin/stealth-backend",
         "to": "bin/stealth-backend"
-      },
-      {
-        "from": ".env",
-        "to": ".env"
       }
     ],
     "mac": {

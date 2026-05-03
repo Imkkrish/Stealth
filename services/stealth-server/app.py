@@ -28,6 +28,7 @@ import socketio
 from fastapi import FastAPI
 
 import auth
+import classifier
 import llm_router
 import prompts
 
@@ -107,11 +108,18 @@ async def disconnect(sid):
 # --------------------------------------------------------------------------
 @sio.event
 async def hello(sid, data: dict):
-    """Receive user config, build LLM provider and system prompt for this session."""
+    """Receive user config, build LLM providers (default + DSA) for this session.
+
+    Two providers are built — one for fast/general routing, one for DSA. They
+    share the same API key and system prompt, only the model name differs.
+    If `model_dsa` is missing or equal to `model`, only one provider is built
+    and reused for both routes (back-compat with old clients).
+    """
     try:
         provider_name = (data or {}).get("provider", "").strip()
         api_key = (data or {}).get("api_key", "").strip()
         model = (data or {}).get("model", "").strip()
+        model_dsa = ((data or {}).get("model_dsa") or "").strip() or model
         slots = {
             "language": (data or {}).get("language", "").strip() or "Python",
             "resume": (data or {}).get("resume_text", "") or "",
@@ -130,20 +138,31 @@ async def hello(sid, data: dict):
             provider = llm_router.build(
                 provider=provider_name, api_key=api_key, model=model, system_prompt=sys_prompt,
             )
+            if model_dsa != model:
+                provider_dsa = llm_router.build(
+                    provider=provider_name, api_key=api_key, model=model_dsa, system_prompt=sys_prompt,
+                )
+            else:
+                # Same model on both routes — share the instance to save a build.
+                provider_dsa = provider
         except Exception as e:
             await sio.emit("hello_ack", {"ok": False, "error": f"build failed: {e}"}, to=sid)
             return
 
         async with sio.session(sid) as sess:
             sess["provider"] = provider
+            sess["provider_dsa"] = provider_dsa
             sess["history"] = []
             sess["slots"] = slots
             sess["provider_name"] = provider_name
             sess["model"] = model
+            sess["model_dsa"] = model_dsa
 
-        log.info("hello sid=%s provider=%s model=%s resume=%dchars",
-                 sid, provider_name, model, len(slots["resume"]))
-        await sio.emit("hello_ack", {"ok": True, "provider": provider_name, "model": model}, to=sid)
+        log.info("hello sid=%s provider=%s model=%s model_dsa=%s resume=%dchars",
+                 sid, provider_name, model, model_dsa, len(slots["resume"]))
+        await sio.emit("hello_ack", {
+            "ok": True, "provider": provider_name, "model": model, "model_dsa": model_dsa,
+        }, to=sid)
     except Exception as e:
         log.exception("hello error sid=%s: %s", sid, e)
         await sio.emit("hello_ack", {"ok": False, "error": str(e)}, to=sid)
@@ -168,7 +187,11 @@ async def _release_stream(sid):
 
 @sio.event
 async def ask(sid, data: dict):
-    """Stream a chat answer back to the client as answer_chunk events."""
+    """Stream a chat answer back to the client as answer_chunk events.
+
+    Routes per-request: DSA-shaped prompts go to the strong model
+    (`provider_dsa` / `model_dsa`); everything else uses the fast default.
+    """
     text = (data or {}).get("text", "").strip()
     if not text:
         await sio.emit("error", {"message": "empty text"}, to=sid)
@@ -177,11 +200,17 @@ async def ask(sid, data: dict):
         text = text[:MAX_INPUT_CHARS]
 
     sess = await sio.get_session(sid)
-    provider = sess.get("provider")
+    provider_default = sess.get("provider")
+    provider_dsa = sess.get("provider_dsa") or provider_default
     history = sess.get("history") or []
-    if provider is None:
+    if provider_default is None:
         await sio.emit("error", {"message": "session not initialized — send hello first"}, to=sid)
         return
+
+    is_dsa = classifier.is_coding_problem(text)
+    provider = provider_dsa if is_dsa else provider_default
+    model_used = sess.get("model_dsa") if is_dsa else sess.get("model")
+    log.info("ask sid=%s routed=%s model=%s len=%d", sid, "dsa" if is_dsa else "default", model_used, len(text))
 
     if not await _try_acquire_stream(sid):
         await sio.emit("error", {"message": "answer already streaming — wait for it to finish"}, to=sid)
@@ -200,7 +229,7 @@ async def ask(sid, data: dict):
             history[:] = history[-HISTORY_TURNS_CAP * 2:]
         async with sio.session(sid) as s:
             s["history"] = history
-        await sio.emit("answer_done", {"full_text": full_text}, to=sid)
+        await sio.emit("answer_done", {"full_text": full_text, "model_used": model_used, "route": "dsa" if is_dsa else "default"}, to=sid)
     except Exception as e:
         log.exception("ask error sid=%s: %s", sid, e)
         await sio.emit("error", {"message": str(e)}, to=sid)
@@ -231,30 +260,34 @@ async def ask_vision(sid, data: dict):
         return
 
     # For vision we recompose with mode="vision" and rebuild a one-shot provider
-    # so the resume/interview context is truncated appropriately. We don't keep
-    # this provider — it's used once and discarded.
+    # so the resume/interview context is truncated appropriately. The model is
+    # always the DSA / strong model — the 95% case is a coding screenshot, and
+    # vision answers are full-card replies where quality > latency. The one-shot
+    # provider is used once and discarded.
     slots = sess.get("slots") or {}
     provider_name = sess.get("provider_name", "")
-    model = sess.get("model", "")
+    model_for_vision = sess.get("model_dsa") or sess.get("model", "")
     api_key = provider.api_key  # type: ignore[attr-defined]
 
     vision_slots = dict(slots, mode="vision")
     vision_system = prompts.compose_for(provider_name, vision_slots)
     try:
         vision_provider = llm_router.build(
-            provider=provider_name, api_key=api_key, model=model, system_prompt=vision_system,
+            provider=provider_name, api_key=api_key, model=model_for_vision, system_prompt=vision_system,
         )
     except Exception as e:
         await sio.emit("error", {"message": f"vision build failed: {e}"}, to=sid)
         await _release_stream(sid)
         return
 
+    log.info("ask_vision sid=%s routed=dsa model=%s img_b64_len=%d", sid, model_for_vision, len(image_b64))
+
     full = []
     try:
         async for token in vision_provider.vision_stream(user_prompt, image_b64, mime):
             full.append(token)
             await sio.emit("answer_chunk", {"token": token}, to=sid)
-        await sio.emit("answer_done", {"full_text": "".join(full)}, to=sid)
+        await sio.emit("answer_done", {"full_text": "".join(full), "model_used": model_for_vision, "route": "dsa"}, to=sid)
     except Exception as e:
         log.exception("ask_vision error sid=%s: %s", sid, e)
         await sio.emit("error", {"message": str(e)}, to=sid)
