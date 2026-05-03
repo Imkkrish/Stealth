@@ -1,0 +1,125 @@
+name: Deploy stealth-server
+
+on:
+  push:
+    branches: [prod]
+    paths:
+      - "services/stealth-server/**"
+      - ".github/workflows/deploy-stealth-server.yml"
+  workflow_dispatch:
+
+# Required for Workload Identity Federation: the workflow must be allowed to
+# request an OIDC token. We also keep contents:read for actions/checkout.
+permissions:
+  contents: read
+  id-token: write
+
+# Don't pile up parallel deploys for the same branch — newer pushes cancel
+# in-flight runs (Cloud Run can handle it but we'd rather not race revisions).
+concurrency:
+  group: deploy-stealth-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/stealth-server/requirements.txt
+
+      - name: Install server requirements
+        working-directory: services/stealth-server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check
+        working-directory: services/stealth-server
+        run: python -m py_compile app.py auth.py llm_router.py prompts.py
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build & push image
+        working-directory: services/stealth-server
+        run: |
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/${CLOUD_RUN_SERVICE}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$CLOUD_RUN_SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --allow-unauthenticated \
+            --min-instances 1 \
+            --max-instances 5 \
+            --concurrency 50 \
+            --timeout 3600 \
+            --set-env-vars "STEALTH_SHARED_SECRET=${{ secrets.STEALTH_SHARED_SECRET }}"
+
+      - name: Fetch service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $URL"
+
+      - name: Smoke test /health
+        run: |
+          set -e
+          URL="${{ steps.url.outputs.url }}"
+          # Cloud Run can take a few seconds to be reachable on the URL after
+          # `deploy` returns. Retry up to 30s.
+          for i in 1 2 3 4 5 6; do
+            if RESPONSE=$(curl -fsS "$URL/health"); then
+              echo "$RESPONSE"
+              echo "$RESPONSE" | grep -q '"ok": *true' || (echo "ok != true" && exit 1)
+              echo "$RESPONSE" | grep -q '"auth_configured": *true' || (echo "auth_configured != true — STEALTH_SHARED_SECRET not set?" && exit 1)
+              echo "✅ /health OK"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "❌ /health never responded"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### stealth-server deploy"
+            echo ""
+            echo "- Image: \`${IMAGE:-(not built)}\`"
+            echo "- Service URL: \`${{ steps.url.outputs.url }}\`"
+            echo "- Region: \`${GCP_REGION}\`"
+            echo "- SHA: \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

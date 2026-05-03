@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ================================================================== -->
+    <!-- STEALTH APP - macOS Entitlements                                   -->
+    <!-- Required for: Microphone, Screen Recording, Python runtime         -->
+    <!-- ================================================================== -->
+
+    <!-- Audio Input (Microphone / BlackHole) -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    
+    <!-- Microphone Access -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+    
+    <!-- Camera Access (for vision features) -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    
+    <!-- Screen Recording / Screen Capture (CRITICAL for vision features) -->
+    <key>com.apple.security.screen-capture</key>
+    <true/>
+
+    <!-- ================================================================== -->
+    <!-- Code Signing Exceptions (Required for PyInstaller binaries)        -->
+    <!-- ================================================================== -->
+    
+    <!-- Allow JIT compilation (required for some Python operations) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- Allow unsigned executable memory (required for NumPy, etc.) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Disable library validation (required for bundled Python libs) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- ================================================================== -->
+    <!-- App Sandbox Exceptions                                             -->
+    <!-- ================================================================== -->
+    
+    <!-- Allow loading arbitrary dylibs (PyInstaller requirement) -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Inherit entitlements to child processes (Python backend) -->
+    <key>com.apple.security.inherit</key>
+    <true/>
+
+</dict>
+</plist>
