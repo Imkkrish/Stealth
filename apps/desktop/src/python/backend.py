@@ -32,9 +32,11 @@ if _this_dir not in sys.path:
 flush_log("Loading user config from ~/.stealth/config.json ...")
 import config_store
 
-user_config = config_store.load_config()
-server_url = user_config.get("server_url", "")
-license_key = user_config.get("license", "")
+# Ensure baked-in server_url + license are written on first run (or top-up if
+# they were missing for any reason). User only ever has to supply provider+key.
+user_config = config_store.bootstrap_config()
+server_url = user_config.get("server_url") or config_store.BAKED_IN_SERVER_URL
+license_key = user_config.get("license") or config_store.BAKED_IN_LICENSE
 api_key = user_config.get("api_key", "")
 provider_name = user_config.get("provider", "")
 model_name = user_config.get("model", "")
@@ -48,11 +50,11 @@ interview_context_pref = user_config.get("interview_context", "")
 resume_text = config_store.get_resume_text()
 
 if config_store.is_configured():
-    flush_log(f"✅ Config loaded: server={server_url}, provider={provider_name}, model={model_name}")
+    flush_log(f"✅ Config loaded: provider={provider_name}, model={model_name}")
     if resume_text:
         flush_log(f"✅ Resume loaded ({len(resume_text)} chars)")
 else:
-    flush_log("⚠️  Not configured yet — frontend will prompt user for server URL + license + API key.")
+    flush_log("⚠️  No API key yet — running in QUEUED mode. User can add a key any time via Settings.")
 
 flush_log("Importing system modules (ssl, certifi, socket, signal)...")
 import ssl
@@ -95,40 +97,54 @@ def kill_process_on_port(port: int) -> bool:
     """Attempt to kill process occupying a port (macOS/Linux)."""
     try:
         import subprocess
+        # First find PIDs
         result = subprocess.run(
-            f"lsof -ti:{port} | xargs kill -9",
+            f"lsof -ti:{port}",
             shell=True,
             capture_output=True,
             text=True
         )
-        if result.returncode == 0:
-            print(f"      ✅ Killed zombie process on port {port}")
-            time.sleep(0.5)  # Give OS time to release port
-            return True
-        return False
+        pids = result.stdout.strip()
+        if not pids:
+            return True  # nothing to kill
+        print(f"      Found PIDs on port {port}: {pids}")
+        # Kill each PID
+        for pid in pids.split('\n'):
+            pid = pid.strip()
+            if pid and pid != str(os.getpid()):  # don't kill ourselves
+                subprocess.run(f"kill -9 {pid}", shell=True, capture_output=True)
+                print(f"      Killed PID {pid}")
+        return True
     except Exception as e:
         print(f"      ⚠️  Could not kill process: {e}")
         return False
 
-def ensure_port_available(port: int) -> bool:
-    """Ensure port is available, attempting cleanup if needed."""
+def ensure_port_available(port: int, max_retries: int = 5) -> bool:
+    """Ensure port is available, attempting cleanup if needed.
+    Retries with increasing backoff to wait for OS to release the port."""
     if not is_port_in_use(port):
         return True
     
     print(f"\n⚠️  Port {port} is already in use!")
     print(f"   Attempting to kill zombie process...")
     
-    if kill_process_on_port(port):
-        if not is_port_in_use(port):
-            return True
+    kill_process_on_port(port)
     
-    print(f"\n" + "=" * 60)
-    print(f"❌ CRITICAL: Port {port} is still occupied!")
-    print(f"=" * 60)
-    print(f"Run this command manually:")
-    print(f"   lsof -ti:{port} | xargs kill -9")
-    print(f"=" * 60 + "\n")
-    return False
+    # Retry with backoff -- macOS can take a moment to release
+    for attempt in range(max_retries):
+        wait = 0.5 * (attempt + 1)
+        time.sleep(wait)
+        if not is_port_in_use(port):
+            print(f"      ✅ Port {port} freed after {attempt + 1} retries")
+            return True
+        print(f"      Retry {attempt + 1}/{max_retries} -- port still busy, waiting {wait:.1f}s...")
+        # Try killing again on later retries
+        if attempt >= 1:
+            kill_process_on_port(port)
+    
+    # Last resort: since we use reuse_address + reuse_port, try anyway
+    print(f"      ⚠️  Port {port} may still be in TIME_WAIT -- proceeding with SO_REUSEADDR")
+    return True
 
 flush_log("Importing server modules (socketio, aiohttp)...")
 import socketio
@@ -897,8 +913,7 @@ async def window_watcher_loop():
                                 'window': current_title
                             })
                             
-                            answer = await analyze_screen_with_vision(target_app=current_title.split(" - ")[0])
-                            await sio.emit('new_answer', {'text': answer})
+                            await analyze_screen_with_vision(target_app=current_title.split(" - ")[0])
                             
                             last_vision_trigger_time = current_time
                 
@@ -1243,8 +1258,21 @@ async def save_setup(sid, data):
         ictx = d.get("interview_context", "").strip()
         resume_path = d.get("resume_path") or None
 
-        if not srv_url or not lic or not provider or not key:
-            await sio.emit('setup_saved', {'success': False, 'error': 'server_url, license, provider, api_key are required'}, to=sid)
+        # Settings-edit case: if api_key was left blank by the user, reuse the
+        # saved one. The renderer shows "Saved (paste new to replace)" so they
+        # know it's still active.
+        if not key:
+            existing = config_store.load_config().get("api_key", "")
+            if existing:
+                key = existing
+
+        if not srv_url:
+            srv_url = config_store.BAKED_IN_SERVER_URL
+        if not lic:
+            lic = config_store.BAKED_IN_LICENSE
+
+        if not provider or not key:
+            await sio.emit('setup_saved', {'success': False, 'error': 'provider and api_key are required'}, to=sid)
             return
 
         # Parse + save resume first (if given)
@@ -1446,41 +1474,45 @@ def start_global_gesture_tap():
 
     print("🎹 Starting Global Stealth Gestures (Option+Click, Cmd+Scroll)...")
     
-    # Listen for Mouse Down and Scroll
-    mask = (1 << kCGEventLeftMouseDown) | (1 << kCGEventScrollWheel)
-    
-    tap = CGEventTapCreate(
-        kCGSessionEventTap,
-        kCGHeadInsertEventTap,
-        0, # active tap
-        mask,
-        global_gesture_callback,
-        None
-    )
-    
-    if not tap:
-        print("❌ Failed to create Event Tap. (Needs Accessibility Permissions)")
-        # Emit warning to frontend
-        if main_loop:
-            asyncio.run_coroutine_threadsafe(
-                sio.emit('critical_error', {
-                    'type': 'accessibility',
-                    'title': '⚠️ Accessibility Permission Required',
-                    'message': 'Stealth Gestures (Option+Click) require Accessibility permissions to work system-wide.',
-                    'instructions': 'System Settings > Privacy > Accessibility > Enable Stealth (or Terminal/VSCode)'
-                }),
-                main_loop
-            )
-        return
+    try:
+        # Listen for Mouse Down and Scroll
+        mask = (1 << kCGEventLeftMouseDown) | (1 << kCGEventScrollWheel)
+        
+        tap = CGEventTapCreate(
+            kCGSessionEventTap,
+            kCGHeadInsertEventTap,
+            0, # active tap
+            mask,
+            global_gesture_callback,
+            None
+        )
+        
+        if not tap:
+            print("❌ Failed to create Event Tap. (Needs Accessibility Permissions)")
+            # Emit warning to frontend
+            if main_loop:
+                asyncio.run_coroutine_threadsafe(
+                    sio.emit('critical_error', {
+                        'type': 'accessibility',
+                        'title': '⚠️ Accessibility Permission Required',
+                        'message': 'Stealth Gestures (Option+Click) require Accessibility permissions to work system-wide.',
+                        'instructions': 'System Settings > Privacy > Accessibility > Enable Stealth (or Terminal/VSCode)'
+                    }),
+                    main_loop
+                )
+            return
 
-    source = CFRunLoopAddSource(
-        CFRunLoopGetCurrent(),
-        CGEventTapEnable(tap, True),
-        kCFRunLoopCommonModes
-    )
-    
-    # Run the loop (This blocks, so run in thread)
-    CFRunLoopRun()
+        source = CFRunLoopAddSource(
+            CFRunLoopGetCurrent(),
+            CGEventTapEnable(tap, True),
+            kCFRunLoopCommonModes
+        )
+        
+        # Run the loop (This blocks, so run in thread)
+        CFRunLoopRun()
+    except Exception as e:
+        print(f"⚠️ Global Gesture Tap crashed: {e}")
+        print("   Gestures disabled, but core functionality continues.")
 
 async def perform_remote_scroll(direction: str, amount: int):
     """Directly executes the scroll event in the background."""

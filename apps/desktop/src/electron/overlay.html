@@ -611,10 +611,11 @@
             background: rgba(0, 0, 0, 0.85);
             backdrop-filter: blur(10px);
             display: none;
-            align-items: center;
+            align-items: flex-start;        /* anchor card to top so scroll works correctly when content overflows */
             justify-content: center;
             z-index: 10000;
             padding: 20px;
+            overflow-y: auto;               /* allow the entire overlay to scroll if the card is taller than the viewport */
         }
 
         .modal-overlay.visible {
@@ -628,6 +629,7 @@
             padding: 24px;
             width: 100%;
             max-width: 360px;
+            margin: auto 0;                 /* vertical centering when card fits, top-anchored when it overflows */
             animation: slideIn 0.3s ease;
         }
 
@@ -751,6 +753,14 @@
             max-width: 420px;
         }
 
+        /* If the card itself ends up taller than the viewport, let the body
+           scroll inside the card — keeps Test / Save / Cancel always reachable. */
+        .modal-card .modal-body {
+            max-height: calc(100vh - 220px);   /* header + buttons + paddings ≈ 220 px */
+            overflow-y: auto;
+            padding-right: 4px;                 /* room for the scrollbar so inputs don't overlap it */
+        }
+
         .modal-row {
             display: flex;
             gap: 8px;
@@ -831,13 +841,18 @@
                 <h2>Set up Stealth</h2>
             </div>
             <div class="modal-body">
-                <p>Stealth talks to a small server we host — it never sees your key. The key + resume stay on this Mac at <code>~/.stealth/</code>.</p>
+                <p>Pick your LLM provider and paste your API key. Your key stays on this Mac at <code>~/.stealth/</code>; it never touches our server's storage.</p>
 
-                <label class="modal-label" for="setup-server-url">Server URL</label>
-                <input type="text" class="modal-input" id="setup-server-url" placeholder="https://stealth-server-xxxxx.run.app" autocomplete="off" spellcheck="false">
+                <!-- Server URL + License are baked-in defaults, hidden from the
+                     UI by default. Power-users can toggle "Advanced" to edit
+                     them (e.g. for self-hosting a stealth-server). -->
+                <div id="setup-advanced" style="display: none;">
+                    <label class="modal-label" for="setup-server-url">Server URL</label>
+                    <input type="text" class="modal-input" id="setup-server-url" autocomplete="off" spellcheck="false">
 
-                <label class="modal-label" for="setup-license">License key</label>
-                <input type="password" class="modal-input" id="setup-license" placeholder="shared secret your friend gave you" autocomplete="off" spellcheck="false">
+                    <label class="modal-label" for="setup-license">License key</label>
+                    <input type="password" class="modal-input" id="setup-license" autocomplete="off" spellcheck="false">
+                </div>
 
                 <label class="modal-label" for="setup-provider">Provider</label>
                 <select class="modal-select" id="setup-provider">
@@ -860,6 +875,8 @@
                     <a href="#" data-link="gemini">Gemini</a> ·
                     <a href="#" data-link="openai">OpenAI</a> ·
                     <a href="#" data-link="anthropic">Anthropic</a>
+                    &nbsp;·&nbsp;
+                    <a href="#" id="setup-advanced-toggle">Advanced</a>
                 </p>
 
                 <label class="modal-label" for="setup-language">Preferred coding language</label>
@@ -878,6 +895,7 @@
                 <p class="modal-error" id="setup-error">Something went wrong</p>
             </div>
             <div class="modal-buttons">
+                <button class="modal-btn secondary" id="setup-cancel" style="display: none;">Cancel</button>
                 <button class="modal-btn secondary" id="setup-test">Test connection</button>
                 <button class="modal-btn primary" id="setup-save">Save &amp; start</button>
             </div>
@@ -936,6 +954,14 @@
                         <line x1="16" y1="13" x2="8" y2="13"></line>
                         <line x1="16" y1="17" x2="8" y2="17"></line>
                         <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                </button>
+
+                <!-- Settings (re-open setup modal pre-filled with current config) -->
+                <button class="ctrl-btn" id="settings-btn" title="Settings">
+                    <svg viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
                     </svg>
                 </button>
 
@@ -1006,6 +1032,7 @@
         const visionBtn = document.getElementById('vision-btn');
         const watchBtn = document.getElementById('watch-btn');
         const readTextBtn = document.getElementById('read-text-btn');
+        const settingsBtn = document.getElementById('settings-btn');
         const closeBtn = document.getElementById('close-btn');
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
@@ -1031,6 +1058,7 @@
         const setupError = document.getElementById('setup-error');
         const setupSaveBtn = document.getElementById('setup-save');
         const setupTestBtn = document.getElementById('setup-test');
+        const setupCancelBtn = document.getElementById('setup-cancel');
 
         // Per-provider auto-fill: `model` is the fast/general default; `model_dsa`
         // is the stronger model the server routes to when the request looks like
@@ -1071,13 +1099,58 @@
         }
 
         function showSetupModal() {
+            console.log('[setup] show (first-run, but skippable)');
             applyProviderDefaults();
+            // First-run gets a "Skip for now" button; if the user dismisses,
+            // the app idles in queued mode and they can come back via ⚙ Settings.
+            setupCancelBtn.textContent = 'Skip for now';
+            setupCancelBtn.style.display = '';
             setupModal.classList.add('visible');
             setupKey.focus();
             apiKeyMissing = true;
         }
 
+        // Reopen the setup modal pre-filled from existing ~/.stealth/config.json.
+        // The API key is intentionally NOT pre-filled — we show "Saved (paste new
+        // to replace)" so the user knows it's intact, and the Python backend
+        // reuses the existing key if the field is left empty on save.
+        async function showSetupModalForEdit() {
+            console.log('[setup] showForEdit');
+            try {
+                const cfg = await ipcRenderer.invoke('get-config-for-edit');
+                if (cfg && cfg.exists) {
+                    setupServerUrl.value = cfg.server_url || '';
+                    setupLicense.value = cfg.license || '';
+                    if (cfg.provider) setupProvider.value = cfg.provider;
+                    applyProviderDefaults();           // sets model + model_dsa to provider defaults
+                    if (cfg.model) setupModel.value = cfg.model;
+                    if (cfg.model_dsa) setupModelDsa.value = cfg.model_dsa;
+                    setupLanguage.value = cfg.language || 'Python';
+                    setupInterview.value = cfg.interview_context || '';
+                    setupKey.value = '';
+                    setupKey.placeholder = cfg.has_api_key
+                        ? 'Saved (paste new to replace)'
+                        : (PROVIDER_DEFAULTS[setupProvider.value] || PROVIDER_DEFAULTS.gemini).placeholder;
+                    setupResumePath = null;
+                    setupResumeName.textContent = cfg.resume_chars
+                        ? `Saved (${cfg.resume_chars} chars) — pick to replace`
+                        : '';
+                    setSetupStatus('');
+                } else {
+                    applyProviderDefaults();
+                }
+            } catch (err) {
+                console.error('Failed to load config for edit:', err);
+            }
+            setupCancelBtn.textContent = 'Cancel';
+            setupCancelBtn.style.display = '';        // edit-flow has Cancel
+            setupModal.classList.add('visible');
+            setupModal.scrollTop = 0;                 // start the (possibly scrolling) overlay at the top
+            // No auto-focus — focusing setupServerUrl on a tall modal can scroll-jank on Mac/WebKit.
+        }
+
         function hideSetupModal() {
+            console.log('[setup] hide');
             setupModal.classList.remove('visible');
             setupError.classList.remove('visible');
             setupStatus.textContent = '';
@@ -1116,6 +1189,10 @@
         });
 
         function collectSetupPayload() {
+            // Server URL + license are baked-in by default. Empty values mean
+            // "use the defaults" — the Python backend's save_config + bootstrap
+            // logic fills them in. Only the API key is genuinely required on
+            // first setup; on edit, an empty key means "keep existing".
             const server_url = setupServerUrl.value.trim();
             const license = setupLicense.value.trim();
             const provider = setupProvider.value;
@@ -1124,10 +1201,11 @@
             const apiKey = setupKey.value.trim();
             const language = setupLanguage.value.trim() || 'Python';
             const interview_context = setupInterview.value.trim();
-            if (!server_url) { setSetupError('Server URL is required'); setupServerUrl.focus(); return null; }
-            if (!license)    { setSetupError('License key is required'); setupLicense.focus(); return null; }
-            if (!apiKey)     { setSetupError('API key is required'); setupKey.focus(); return null; }
-            if (!model)      { setSetupError('Default model is required'); setupModel.focus(); return null; }
+            // On first run, key is required. On edit (placeholder shows "Saved"),
+            // an empty key is OK — backend reuses the saved one.
+            const isEdit = setupCancelBtn.textContent === 'Cancel';
+            if (!apiKey && !isEdit) { setSetupError('API key is required'); setupKey.focus(); return null; }
+            if (!model)  { setSetupError('Default model is required'); setupModel.focus(); return null; }
             return {
                 server_url, license, provider, model, model_dsa,
                 api_key: apiKey,
@@ -1136,41 +1214,24 @@
             };
         }
 
-        setupTestBtn.addEventListener('click', () => {
-            const payload = collectSetupPayload();
-            if (!payload) return;
-            if (!socket || !socket.connected) {
-                setSetupError('Backend not connected yet — wait a moment.');
-                return;
-            }
-            setSetupStatus('Testing connection…');
-            setupTestBtn.disabled = true;
-            socket.emit('test_connection', {
-                server_url: payload.server_url,
-                license: payload.license,
-                provider: payload.provider,
-                api_key: payload.api_key,
-                model: payload.model,
-            });
-            socket.once('test_connection_result', (res) => {
-                setupTestBtn.disabled = false;
-                if (res && res.success) {
-                    setSetupStatus('Connection OK ✓', 'ok');
-                } else {
-                    setSetupError(`Test failed: ${(res && res.error) || 'unknown error'}`);
-                }
-            });
+        // Advanced toggle — reveals server URL + license inputs for power users
+        // who want to point Stealth at a different server.
+        document.getElementById('setup-advanced-toggle').addEventListener('click', (e) => {
+            e.preventDefault();
+            const adv = document.getElementById('setup-advanced');
+            adv.style.display = adv.style.display === 'none' ? 'block' : 'none';
         });
 
-        setupSaveBtn.addEventListener('click', () => {
-            const payload = collectSetupPayload();
-            if (!payload) return;
-            if (!socket || !socket.connected) {
-                setSetupError('Backend not connected yet — wait a moment.');
-                return;
-            }
+        // -----------------------------------------------------------------
+        // Setup form: Test + Save are queueable.
+        // The Python backend takes a few seconds to boot the local Socket.IO
+        // server. Don't make the user wait — accept the form immediately,
+        // queue the action, and auto-flush as soon as `socket.connect` fires.
+        // -----------------------------------------------------------------
+        let pendingSetupAction = null; // { kind: 'save'|'test', payload }
+
+        function emitSaveSetup(payload) {
             setSetupStatus('Saving…');
-            setupSaveBtn.disabled = true;
             socket.emit('save_setup', payload);
             socket.once('setup_saved', (res) => {
                 setupSaveBtn.disabled = false;
@@ -1186,6 +1247,58 @@
                     setSetupError(`Save failed: ${(res && res.error) || 'unknown error'}`);
                 }
             });
+        }
+
+        function emitTestConnection(payload) {
+            setSetupStatus('Testing connection…');
+            socket.emit('test_connection', {
+                server_url: payload.server_url,
+                license: payload.license,
+                provider: payload.provider,
+                api_key: payload.api_key,
+                model: payload.model,
+            });
+            socket.once('test_connection_result', (res) => {
+                setupTestBtn.disabled = false;
+                if (res && res.success) {
+                    setSetupStatus('Connection OK ✓', 'ok');
+                } else {
+                    setSetupError(`Test failed: ${(res && res.error) || 'unknown error'}`);
+                }
+            });
+        }
+
+        // Called after socket.connect — flushes any queued setup action.
+        function flushPendingSetup() {
+            if (!pendingSetupAction) return;
+            const action = pendingSetupAction;
+            pendingSetupAction = null;
+            if (action.kind === 'save') emitSaveSetup(action.payload);
+            else if (action.kind === 'test') emitTestConnection(action.payload);
+        }
+
+        setupTestBtn.addEventListener('click', () => {
+            const payload = collectSetupPayload();
+            if (!payload) return;
+            setupTestBtn.disabled = true;
+            if (socket && socket.connected) {
+                emitTestConnection(payload);
+            } else {
+                pendingSetupAction = { kind: 'test', payload };
+                setSetupStatus('Queued — waiting for backend to start…');
+            }
+        });
+
+        setupSaveBtn.addEventListener('click', () => {
+            const payload = collectSetupPayload();
+            if (!payload) return;
+            setupSaveBtn.disabled = true;
+            if (socket && socket.connected) {
+                emitSaveSetup(payload);
+            } else {
+                pendingSetupAction = { kind: 'save', payload };
+                setSetupStatus('Queued — saving as soon as backend is up…');
+            }
         });
 
         // Enter on the key field = Save
@@ -1289,6 +1402,32 @@
             }
         });
 
+        // Settings — re-open the setup modal pre-filled from saved config.
+        // stopPropagation is defensive: the window-level click handler at the
+        // bottom of this file checks `e.altKey`, but if the user happens to be
+        // holding Option (e.g. for a separate macOS gesture) we don't want the
+        // click to also trigger Rapid Vision.
+        settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            settingsBtn.classList.add('active');
+            setTimeout(() => settingsBtn.classList.remove('active'), 200);
+            showSetupModalForEdit();
+        });
+
+        // Cancel/Skip button: close the modal without saving. On first-run
+        // (no key configured), put the app into queued mode and tell the user
+        // how to come back. On edit, just dismiss.
+        setupCancelBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const wasFirstRun = apiKeyMissing;
+            hideSetupModal();
+            if (wasFirstRun) {
+                statusDot.className = 'status-dot idle';
+                statusText.textContent = '⚙ Add API key in Settings';
+                addSolution('**Queued — no API key yet.**\n\nClick the ⚙ Settings button in the header any time to add your provider key. Until then, transcription works but AI answers are paused.');
+            }
+        });
+
         // Ghost button click handler
         ghostBtn.addEventListener('mousedown', (e) => {
             e.stopPropagation();
@@ -1323,6 +1462,9 @@
                 statusDot.className = 'status-dot connected';
                 statusText.textContent = 'Active';
                 transcriptionHeader.classList.add('active');
+                // If the user clicked Save / Test before the backend was up,
+                // their action was queued — flush it now.
+                flushPendingSetup();
             });
 
             socket.on('disconnect', () => {

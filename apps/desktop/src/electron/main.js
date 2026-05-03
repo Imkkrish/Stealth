@@ -207,11 +207,40 @@ function startPythonBackend() {
 function stopPythonBackend() {
     if (pythonProcess) {
         console.log('Stopping Python backend...');
-        pythonProcess.kill('SIGTERM');
+        try {
+            pythonProcess.kill('SIGTERM');
+            // Give it a moment, then force kill
+            setTimeout(() => {
+                try {
+                    if (pythonProcess) pythonProcess.kill('SIGKILL');
+                } catch (e) { /* already dead */ }
+            }, 2000);
+        } catch (e) { /* already dead */ }
         pythonProcess = null;
         return true;
     }
     return false;
+}
+
+// Kill any zombie backend processes on port 5051 (from previous crashes)
+function cleanupZombieBackend() {
+    try {
+        const { execSync } = require('child_process');
+        const pids = execSync('lsof -ti:5051 2>/dev/null || true').toString().trim();
+        if (pids) {
+            console.log(`🧹 Cleaning up zombie backend PIDs: ${pids}`);
+            for (const pid of pids.split('\n')) {
+                if (pid.trim()) {
+                    try { execSync(`kill -9 ${pid.trim()} 2>/dev/null`); } catch (e) { }
+                }
+            }
+            // Wait for port release
+            return new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    } catch (e) {
+        console.warn('Zombie cleanup warning:', e.message);
+    }
+    return Promise.resolve();
 }
 
 // =============================================================================
@@ -462,6 +491,43 @@ function createWindow() {
         }
     });
 
+    // For the Settings button: returns everything needed to pre-fill the setup
+    // modal EXCEPT the API key itself. The renderer shows "Saved (paste new to
+    // replace)" as the api_key placeholder; if the user submits an empty key,
+    // the Python backend's save_setup keeps the existing one.
+    ipcMain.handle('get-config-for-edit', async () => {
+        try {
+            const home = require('os').homedir();
+            const cfgPath = path.join(home, '.stealth', 'config.json');
+            const resumePath = path.join(home, '.stealth', 'resume.txt');
+            if (!fs.existsSync(cfgPath)) {
+                return { exists: false };
+            }
+            const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            let resumeChars = 0;
+            try {
+                if (fs.existsSync(resumePath)) {
+                    resumeChars = fs.statSync(resumePath).size;
+                }
+            } catch (_) { /* ignore */ }
+            return {
+                exists: true,
+                server_url: raw.server_url || '',
+                license: raw.license || '',
+                provider: raw.provider || '',
+                model: raw.model || '',
+                model_dsa: raw.model_dsa || '',
+                language: raw.language || 'Python',
+                interview_context: raw.interview_context || '',
+                has_api_key: Boolean(raw.api_key),
+                resume_chars: resumeChars,
+            };
+        } catch (err) {
+            console.error('get-config-for-edit failed:', err);
+            return { exists: false };
+        }
+    });
+
     // Auto-start backend after window is fully loaded
     mainWindow.webContents.on('did-finish-load', () => {
         console.log('✅ Window finished loading');
@@ -515,8 +581,9 @@ function registerGlobalShortcuts() {
 // =============================================================================
 // APP LIFECYCLE
 // =============================================================================
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     console.log('✅ Electron app ready');
+    await cleanupZombieBackend();
     createWindow();
     registerGlobalShortcuts();
 
@@ -542,6 +609,11 @@ app.on('will-quit', () => {
 
 app.on('before-quit', () => {
     stopPythonBackend();
+    // Also cleanup the port in case SIGTERM didn't work
+    try {
+        const { execSync } = require('child_process');
+        execSync('lsof -ti:5051 2>/dev/null | xargs kill -9 2>/dev/null || true');
+    } catch (e) { }
 });
 
 // Handle uncaught exceptions
