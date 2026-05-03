@@ -444,9 +444,12 @@ async def load_models():
     transcribe_thread.start()
     
     # Start Global Gestures once environment is ready
-    threading.Thread(target=start_global_gesture_tap, daemon=True).start()
+    # NOTE: Disabled — CFRunLoopRun() in a daemon thread segfaults on
+    # Python 3.14 + pyobjc Quartz. The overlay's in-window gestures
+    # (Option+Click, Cmd+Scroll) still work via the renderer JS.
+    # threading.Thread(target=start_global_gesture_tap, daemon=True).start()
     
-    print("      ✅ Hardware loops and Stealth Gestures active.")
+    print("      ✅ Hardware loops active (gestures handled by Electron).")
 
 # Note: The system prompt now lives on the server (server/prompts.py — slot
 # composer, per-provider tuned). The client just streams transcripts and
