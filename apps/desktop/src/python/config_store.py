@@ -23,6 +23,15 @@ CONFIG_DIR = Path.home() / ".stealth"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 RESUME_PATH = CONFIG_DIR / "resume.txt"
 
+# ----------------------------------------------------------------------------
+# Baked-in defaults — friends should not have to know these. They live with
+# the app binary; rotating either requires shipping a new client. The license
+# is a low-stakes shared secret (limits server access to people who have the
+# app), not a real auth credential.
+# ----------------------------------------------------------------------------
+BAKED_IN_SERVER_URL = "https://stealth-server-ojhmhbexla-el.a.run.app"
+BAKED_IN_LICENSE = "4c57e3a11042f31f46b0a3314ce2612017e5213f06f87f83"
+
 # Default model used for general / conversational requests — fast, cheap, good
 # enough for chit-chat / MCQ / conceptual.
 DEFAULT_MODELS = {
@@ -48,26 +57,55 @@ DEFAULT_LANGUAGE = "Python"
 
 
 def _ensure_dir():
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Create ~/.stealth/ if it doesn't exist.
+
+    Gracefully handles macOS TCC permission blocks where stat() fails with
+    EPERM but the directory actually exists on disk, causing mkdir(exist_ok)
+    to raise FileExistsError instead of silently succeeding.
+    """
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, PermissionError, OSError):
+        # FileExistsError: TCC blocks stat() — dir exists but pathlib can't
+        #   confirm it, so exist_ok=True doesn't kick in.
+        # PermissionError/OSError: system-level block on the path.
+        pass
     try:
         os.chmod(CONFIG_DIR, 0o700)
     except OSError:
         pass
 
 
+def _safe_write(path: Path, data: str, mode: int = 0o600):
+    """Write text to a file, ignoring permission errors."""
+    try:
+        path.write_text(data, encoding="utf-8")
+    except (PermissionError, OSError) as e:
+        print(f"⚠️  config_store: cannot write {path}: {e}")
+        return False
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+    return True
+
+
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
+    try:
+        if not CONFIG_PATH.exists():
+            return {}
+    except (PermissionError, OSError):
         return {}
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, PermissionError, OSError):
         return {}
 
 
 def save_config(
     *,
-    server_url: str,
-    license: str,
+    server_url: str = "",
+    license: str = "",
     provider: str,
     api_key: str,
     model: str = "",
@@ -75,17 +113,18 @@ def save_config(
     language: str = "",
     interview_context: str = "",
 ) -> dict:
+    """Persist the user's config. server_url and license fall back to the
+    baked-in defaults — the user does not need to provide them."""
     if provider not in VALID_PROVIDERS:
         raise ValueError(f"Unknown provider: {provider!r}. Must be one of {sorted(VALID_PROVIDERS)}.")
-    for name, val in (("server_url", server_url), ("license", license), ("api_key", api_key)):
-        if not isinstance(val, str) or not val.strip():
-            raise ValueError(f"{name} must be a non-empty string")
-        if "\n" in val or "\r" in val:
-            raise ValueError(f"{name} must not contain newlines")
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise ValueError("api_key must be a non-empty string")
+    if "\n" in api_key or "\r" in api_key:
+        raise ValueError("api_key must not contain newlines")
 
     cfg = {
-        "server_url": server_url.strip().rstrip("/"),
-        "license": license.strip(),
+        "server_url": (server_url or BAKED_IN_SERVER_URL).strip().rstrip("/"),
+        "license": (license or BAKED_IN_LICENSE).strip(),
         "provider": provider,
         "api_key": api_key.strip(),
         "model": (model or DEFAULT_MODELS[provider]).strip(),
@@ -94,42 +133,59 @@ def save_config(
         "interview_context": (interview_context or "").strip(),
     }
     _ensure_dir()
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    try:
-        os.chmod(CONFIG_PATH, 0o600)
-    except OSError:
-        pass
+    _safe_write(CONFIG_PATH, json.dumps(cfg, indent=2))
+    return cfg
+
+
+def bootstrap_config() -> dict:
+    """Make sure ~/.stealth/config.json exists and has the baked-in server_url
+    + license. Called on every backend start; idempotent.
+
+    Does NOT add a provider/api_key — those are user-supplied. Returns the
+    (possibly partially-empty) config dict.
+    """
+    cfg = load_config()
+    changed = False
+    if not cfg.get("server_url"):
+        cfg["server_url"] = BAKED_IN_SERVER_URL
+        changed = True
+    if not cfg.get("license"):
+        cfg["license"] = BAKED_IN_LICENSE
+        changed = True
+    if changed:
+        _ensure_dir()
+        _safe_write(CONFIG_PATH, json.dumps(cfg, indent=2))
     return cfg
 
 
 def is_configured() -> bool:
+    """The app is "configured" once the user has supplied a provider + api_key.
+    server_url and license auto-fill from baked-in defaults, so we only check
+    the user-supplied fields."""
     cfg = load_config()
-    return bool(
-        cfg.get("server_url")
-        and cfg.get("license")
-        and cfg.get("provider")
-        and cfg.get("api_key")
-    )
+    return bool(cfg.get("provider") and cfg.get("api_key"))
 
 
 def get_resume_text() -> str:
-    if not RESUME_PATH.exists():
+    try:
+        if not RESUME_PATH.exists():
+            return ""
+    except (PermissionError, OSError):
         return ""
     try:
         return RESUME_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (PermissionError, OSError):
         return ""
 
 
 def save_resume_text(text: str) -> None:
     _ensure_dir()
-    RESUME_PATH.write_text(text or "", encoding="utf-8")
-    try:
-        os.chmod(RESUME_PATH, 0o600)
-    except OSError:
-        pass
+    _safe_write(RESUME_PATH, text or "")
 
 
 def clear_resume() -> None:
-    if RESUME_PATH.exists():
-        RESUME_PATH.unlink()
+    try:
+        if RESUME_PATH.exists():
+            RESUME_PATH.unlink()
+    except (PermissionError, OSError):
+        pass

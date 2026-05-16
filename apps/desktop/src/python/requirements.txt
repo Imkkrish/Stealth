@@ -1,7 +1,7 @@
 # Stealth client v2 — light. No LLM SDKs (server handles those), no torch.
 
 # Async + Socket.IO server (overlay <-> Python) and client (Python -> GCP)
-aiohttp==3.9.5
+aiohttp>=3.10.0
 python-socketio[asyncio_client]>=5.11.0
 python-engineio>=4.9.0
 

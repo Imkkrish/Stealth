@@ -52,6 +52,10 @@ if (!app || typeof app.disableHardwareAcceleration !== 'function') {
 app.disableHardwareAcceleration();
 console.log('✅ Hardware acceleration disabled');
 
+// Required for unsigned/ad-hoc signed packaged apps on macOS
+app.commandLine.appendSwitch('no-sandbox');
+console.log('✅ Sandbox disabled for packaged build');
+
 if (process.platform === 'darwin') {
     app.dock.hide();
     console.log('✅ Dock icon hidden (macOS)');
@@ -60,6 +64,8 @@ if (process.platform === 'darwin') {
 let mainWindow = null;
 let pythonProcess = null;
 let isGhostMode = false;  // Track ghost mode state globally
+let ipcHandlersRegistered = false;  // Prevent duplicate ipcMain.handle() on window recreate
+let rendererCrashCount = 0;  // Prevent infinite crash-recreation loops
 
 // =============================================================================
 // SAFE IPC SEND - Prevents "Render frame was disposed" crashes
@@ -226,7 +232,7 @@ function stopPythonBackend() {
 function cleanupZombieBackend() {
     try {
         const { execSync } = require('child_process');
-        const pids = execSync('lsof -ti:5051 2>/dev/null || true').toString().trim();
+        const pids = execSync('lsof -ti:5051 -sTCP:LISTEN 2>/dev/null || true').toString().trim();
         if (pids) {
             console.log(`🧹 Cleaning up zombie backend PIDs: ${pids}`);
             for (const pid of pids.split('\n')) {
@@ -296,7 +302,8 @@ function createWindow() {
         minHeight: 400,
         maxWidth: 600,
         skipTaskbar: true,
-        focusable: true,
+        focusable: false,  // CRITICAL: Don't steal focus from Chrome/interview app
+        show: false,  // Don't show until content loads (prevents invisible-but-blocking window)
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
@@ -304,9 +311,8 @@ function createWindow() {
         }
     });
 
-    // CRITICAL: Prevent screen capture
-    mainWindow.setContentProtection(true);
-    console.log('✅ Content protection enabled');
+    // NOTE: Content protection is applied AFTER window shows (in did-finish-load)
+    // Applying it before causes renderer crashes on macOS with unsigned builds.
 
     // Start in interactive mode
     mainWindow.setIgnoreMouseEvents(false);
@@ -319,8 +325,10 @@ function createWindow() {
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
 
     // =========================================================================
-    // IPC HANDLERS (with safeSend protection)
+    // IPC HANDLERS — guarded to prevent duplicate registration on window recreate
     // =========================================================================
+    if (!ipcHandlersRegistered) {
+    ipcHandlersRegistered = true;
 
     // Ghost mode toggle from renderer
     ipcMain.on('set-ghost-mode', (event, enabled) => {
@@ -448,6 +456,20 @@ function createWindow() {
         }, 300);
     });
 
+    // Temporarily enable/disable focus (needed for settings modal input fields)
+    ipcMain.on('set-focusable', (event, focusable) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.setFocusable(focusable);
+            if (focusable) {
+                mainWindow.focus();
+                console.log('⌨️ Focus enabled (settings modal)');
+            } else {
+                mainWindow.blur();
+                console.log('⌨️ Focus disabled (back to non-focusable)');
+            }
+        }
+    });
+
     // ---- Setup flow IPC ----
     // Renderer → main.js: open a file dialog to pick a resume.
     // Returns the absolute path or null if cancelled. The renderer then
@@ -528,13 +550,64 @@ function createWindow() {
         }
     });
 
+    } // end ipcHandlersRegistered guard
+
     // Auto-start backend after window is fully loaded
     mainWindow.webContents.on('did-finish-load', () => {
         console.log('✅ Window finished loading');
+        mainWindow.show();
+        rendererCrashCount = 0;  // Reset crash counter on successful load
+
+        // CRITICAL: Hide from screen share/recording
+        mainWindow.setContentProtection(true);
+        console.log('✅ Content protection enabled (hidden from screen share)');
+
         // We no longer send status here; we wait for 'PY_BACKEND_READY' from stdout
-        setTimeout(() => {
-            startPythonBackend();
-        }, 500);
+        if (!pythonProcess) {
+            setTimeout(() => {
+                startPythonBackend();
+            }, 500);
+        }
+    });
+
+    // Detect renderer crashes — the #1 cause of invisible-but-blocking windows
+    mainWindow.webContents.on('render-process-gone', (event, details) => {
+        console.error('💀 Renderer CRASHED:', details.reason, details.exitCode);
+        // Destroy the broken window so it stops blocking clicks
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.destroy();
+        }
+        mainWindow = null;
+
+        // Limit retries to prevent infinite crash loop
+        rendererCrashCount++;
+        if (rendererCrashCount <= 2) {
+            setTimeout(() => {
+                console.log(`🔄 Recreating window (attempt ${rendererCrashCount}/2)...`);
+                createWindow();
+            }, 2000);
+        } else {
+            console.error('❌ Renderer crashed 3 times. Giving up. Check overlay.html for errors.');
+        }
+    });
+
+    // Capture renderer console output for diagnostics
+    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+        if (level >= 2) { // warnings and errors only
+            console.log(`[Renderer:${level}] ${message} (line ${line})`);
+        }
+    });
+
+    mainWindow.webContents.on('unresponsive', () => {
+        console.error('⚠️ Renderer became UNRESPONSIVE');
+    });
+
+    mainWindow.webContents.on('responsive', () => {
+        console.log('✅ Renderer is responsive again');
+    });
+
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc) => {
+        console.error(`❌ Page failed to load: ${errorCode} ${errorDesc}`);
     });
 
     // Handle window close
@@ -612,12 +685,15 @@ app.on('before-quit', () => {
     // Also cleanup the port in case SIGTERM didn't work
     try {
         const { execSync } = require('child_process');
-        execSync('lsof -ti:5051 2>/dev/null | xargs kill -9 2>/dev/null || true');
+        execSync('lsof -ti:5051 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true');
     } catch (e) { }
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions — don't kill backend for recoverable errors
 process.on('uncaughtException', (error) => {
     console.error('Uncaught exception:', error);
-    stopPythonBackend();
+    // Only stop backend if it's a truly fatal error, not a window recreation issue
+    if (error.message && !error.message.includes('second handler')) {
+        stopPythonBackend();
+    }
 });

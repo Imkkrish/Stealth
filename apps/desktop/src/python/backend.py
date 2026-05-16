@@ -9,6 +9,10 @@ macOS Compatible with sounddevice
 # =============================================================================
 import os
 import sys
+import multiprocessing
+
+# CRITICAL: Required for PyInstaller to prevent child processes from re-running main()
+multiprocessing.freeze_support()
 
 # Ensure all output is flushed immediately
 def flush_log(msg):
@@ -97,9 +101,11 @@ def kill_process_on_port(port: int) -> bool:
     """Attempt to kill process occupying a port (macOS/Linux)."""
     try:
         import subprocess
-        # First find PIDs
+        # IMPORTANT: Only find processes LISTENING on the port, not clients connected to it.
+        # Using plain `lsof -ti:{port}` would also find the Electron renderer's socket
+        # connection and kill it, crashing the entire app!
         result = subprocess.run(
-            f"lsof -ti:{port}",
+            f"lsof -ti:{port} -sTCP:LISTEN",
             shell=True,
             capture_output=True,
             text=True
@@ -284,8 +290,11 @@ async def connect_server() -> tuple[bool, str]:
     """
     global server_conn, resume_text
 
-    if not config_store.is_configured():
-        return (False, "client not configured")
+    # Check the in-memory globals (populated by save_setup) rather than reading
+    # config from disk — disk may be TCC-blocked but the user already entered
+    # their credentials via the setup modal.
+    if not provider_name or not api_key:
+        return (False, "client not configured — provider and api_key needed")
 
     # Always pick up the latest resume on the way out the door.
     resume_text = config_store.get_resume_text()
@@ -300,8 +309,8 @@ async def connect_server() -> tuple[bool, str]:
 
     import server_client
     sc = server_client.ServerClient(
-        server_url=server_url,
-        license_key=license_key,
+        server_url=server_url or config_store.BAKED_IN_SERVER_URL,
+        license_key=license_key or config_store.BAKED_IN_LICENSE,
         on_chunk=_on_server_chunk,
         on_done=_on_server_done,
         on_error=_on_server_error,
@@ -528,20 +537,18 @@ def is_image_mostly_black(img, threshold: float = 0.95) -> bool:
     """Check if an image is mostly black (indicates permission issue).
     Returns True if more than threshold% of pixels are black/very dark."""
     try:
-        # Convert to grayscale for easier analysis
         gray = img.convert('L')
-        pixels = list(gray.getdata())
-        
-        # Count very dark pixels (value < 10 out of 255)
-        dark_pixels = sum(1 for p in pixels if p < 10)
-        total_pixels = len(pixels)
-        
+        # Use numpy instead of deprecated getdata()
+        pixels = np.array(gray)
+        dark_pixels = np.sum(pixels < 10)
+        total_pixels = pixels.size
+
         if total_pixels == 0:
             return True
-            
+
         dark_ratio = dark_pixels / total_pixels
         return dark_ratio > threshold
-        
+
     except Exception as e:
         print(f"      ⚠️ Black check error: {e}")
         return False
@@ -551,9 +558,6 @@ def capture_screen(target_app: str = None):
     Uses Quartz for direct window capture without switching apps if possible."""
 
     print(f"      📷 Starting Smart Capture for: {target_app}...")
-    
-    # Debug: Save captured images to desktop
-    debug_path = os.path.expanduser("~/Desktop/stealth_capture_debug.png")
     
     # 1. STEALTH WINDOW CAPTURE (Quartz)
     if QUARTZ_AVAILABLE:
@@ -630,9 +634,6 @@ def capture_screen(target_app: str = None):
                         if not is_image_mostly_black(img):
                             img.thumbnail(VISION_SIZE, Image.Resampling.LANCZOS)
                             print(f"      ✅ Stealth window capture successful (Attempt {attempt+1}): {img.size}")
-                            try:
-                                img.save(debug_path)
-                            except: pass
                             return img
                     
                     if attempt == 0:
@@ -654,12 +655,6 @@ def capture_screen(target_app: str = None):
             
             img.thumbnail(VISION_SIZE, Image.Resampling.LANCZOS)
             print(f"      ✅ MSS capture successful: {img.size}")
-            # DEBUG: Save to desktop
-            try:
-                img.save(debug_path)
-                print(f"      🔍 Debug image saved to {debug_path}")
-            except Exception as save_err:
-                print(f"      ⚠️ Could not save debug: {save_err}")
             return img
     except Exception as e:
         print(f"      ❌ MSS failed: {e}")
@@ -937,38 +932,62 @@ async def window_watcher_loop():
 
 
 # =============================================================================
-# AUDIO CAPTURE LOOP (using sounddevice)
+# AUDIO CAPTURE LOOP (callback-based, gapless)
 # =============================================================================
 def audio_loop(device_index):
-    """Continuous audio capture using sounddevice."""
+    """Continuous gapless audio capture using sd.InputStream callback.
+
+    Previous implementation used sd.rec() + sd.wait() which left ~50ms gaps
+    between recording windows — enough to clip syllables during continuous
+    speech.  The callback approach feeds every audio frame into a ring buffer
+    so nothing is dropped.
+    """
     device_name = "default" if device_index is None else sd.query_devices(device_index)['name']
-    print(f"\n🎤 Starting Audio Capture: {device_name}")
-    
+    print(f"\n🎤 Starting Audio Capture (gapless): {device_name}")
+
+    frames_per_chunk = int(SAMPLE_RATE * CHUNK_DURATION)
+    ring_buf = []          # list of float32 arrays, drained every CHUNK_DURATION
+    ring_lock = threading.Lock()
+
+    def _audio_callback(indata, frames, time_info, status):
+        """Called by PortAudio on every buffer — never blocks."""
+        if status:
+            print(f"      ⚠️ Audio status: {status}")
+        # Copy immediately so PortAudio can reuse the buffer
+        with ring_lock:
+            ring_buf.append(indata[:, 0].copy())
+
     try:
-        frames_per_chunk = int(SAMPLE_RATE * CHUNK_DURATION)
-        print("      ✅ Recorder initialized. Listening...")
-        
+        stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype='float32',
+            device=device_index,
+            blocksize=frames_per_chunk,
+            callback=_audio_callback,
+        )
+        stream.start()
+        print("      ✅ Gapless recorder started. Listening...")
+
         while True:
-            # Check stealth mode - don't start recording if active
+            # Pause capture when ghost-mode / deep-stealth is active
             if stealth_mode_active:
                 time.sleep(1)
                 continue
 
-            audio_data = sd.rec(
-                frames_per_chunk,
-                samplerate=SAMPLE_RATE,
-                channels=1,
-                dtype='float32',
-                device=device_index
-            )
-            sd.wait()
-            
-            audio_flat = audio_data.flatten()
+            # Sleep for the chunk duration, then drain the ring buffer
+            time.sleep(CHUNK_DURATION)
+
+            with ring_lock:
+                if not ring_buf:
+                    continue
+                audio_flat = np.concatenate(ring_buf)
+                ring_buf.clear()
+
             rms = np.sqrt(np.mean(audio_flat ** 2))
-            
             if rms > SILENCE_THRESHOLD:
                 audio_queue.put(audio_flat)
-                
+
     except Exception as e:
         print(f"❌ Audio Capture Error: {e}")
 
@@ -1273,6 +1292,10 @@ async def save_setup(sid, data):
             srv_url = config_store.BAKED_IN_SERVER_URL
         if not lic:
             lic = config_store.BAKED_IN_LICENSE
+        if not model:
+            model = config_store.DEFAULT_MODELS.get(provider, "")
+        if not model_dsa:
+            model_dsa = config_store.DEFAULT_DSA_MODELS.get(provider, model)
 
         if not provider or not key:
             await sio.emit('setup_saved', {'success': False, 'error': 'provider and api_key are required'}, to=sid)
@@ -1340,14 +1363,14 @@ async def test_connection(sid, data):
     """
     try:
         d = data or {}
-        srv_url = d.get("server_url", "").strip() or server_url
-        lic = d.get("license", "").strip() or license_key
+        srv_url = d.get("server_url", "").strip() or server_url or config_store.BAKED_IN_SERVER_URL
+        lic = d.get("license", "").strip() or license_key or config_store.BAKED_IN_LICENSE
         provider = d.get("provider", "").strip()
         key = d.get("api_key", "").strip()
         model = d.get("model", "").strip() or config_store.DEFAULT_MODELS.get(provider, "")
 
-        if not srv_url or not lic or not provider or not key or not model:
-            await sio.emit('test_connection_result', {'success': False, 'error': 'server_url, license, provider, api_key, model required'}, to=sid)
+        if not provider or not key or not model:
+            await sio.emit('test_connection_result', {'success': False, 'error': 'provider, api_key, and model are required'}, to=sid)
             return
 
         # Spin up an isolated probe connection — does not disturb the live session.

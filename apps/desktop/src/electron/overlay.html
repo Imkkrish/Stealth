@@ -360,6 +360,62 @@
             border-radius: 10px;
             padding: 14px;
             animation: slideIn 0.3s ease;
+            transition: border-color 0.4s ease, box-shadow 0.4s ease;
+        }
+
+        .solution-card.streaming {
+            border-color: rgba(96, 165, 250, 0.35);
+            box-shadow: 0 0 16px rgba(96, 165, 250, 0.08), inset 0 0 24px rgba(96, 165, 250, 0.03);
+            animation: slideIn 0.3s ease, streamPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes streamPulse {
+            0%, 100% { box-shadow: 0 0 16px rgba(96, 165, 250, 0.08); }
+            50% { box-shadow: 0 0 24px rgba(96, 165, 250, 0.18); }
+        }
+
+        /* Cloud / Live badge in status bar */
+        .cloud-badge {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: rgba(96, 165, 250, 0.15);
+            color: var(--accent-blue);
+            border: 1px solid rgba(96, 165, 250, 0.25);
+            margin-left: auto;
+        }
+
+        .cloud-badge.visible {
+            display: flex;
+        }
+
+        .cloud-badge svg {
+            width: 10px;
+            height: 10px;
+            stroke: var(--accent-blue);
+            stroke-width: 2;
+            fill: none;
+        }
+
+        /* Capture flash overlay */
+        .capture-flash {
+            position: fixed;
+            inset: 0;
+            background: rgba(96, 165, 250, 0.1);
+            pointer-events: none;
+            z-index: 9998;
+            animation: flashOut 0.3s ease-out forwards;
+        }
+
+        @keyframes flashOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
         }
 
         @keyframes slideIn {
@@ -979,6 +1035,10 @@
         <div class="status-bar">
             <span class="status-dot" id="status-dot"></span>
             <span class="status-text" id="status-text">Connecting...</span>
+            <span class="cloud-badge" id="cloud-badge">
+                <svg viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                <span>Live</span>
+            </span>
             <span class="hotkey-hint">⌘⇧L</span>
             <span class="context-info" id="context-info"></span>
         </div>
@@ -1021,8 +1081,31 @@
     </div>
 
     <script>
+        // Crash-proof: catch any error that would kill the renderer
+        window.onerror = function(msg, url, line, col, err) {
+            console.error('RENDERER ERROR:', msg, url, line);
+            document.body.style.background = '#1a1a2e';
+            document.body.innerHTML = '<div style="color:#ff6b6b;padding:30px;font-family:monospace;">' +
+                '<h2>⚠️ Stealth Renderer Error</h2>' +
+                '<pre>' + msg + '\n' + (err && err.stack || '') + '</pre></div>';
+            return true; // prevent default
+        };
+
         const { ipcRenderer } = require('electron');
-        const io = require('socket.io-client');
+        let io;
+        try {
+            io = require('socket.io-client');
+        } catch (e) {
+            // Fallback: try loading from node_modules path directly
+            try {
+                io = require('../../node_modules/socket.io-client');
+            } catch (e2) {
+                console.error('Failed to load socket.io-client:', e.message, e2.message);
+                document.body.style.background = '#1a1a2e';
+                document.body.innerHTML = '<div style="color:#ff6b6b;padding:30px;font-family:monospace;">' +
+                    '<h2>⚠️ Module Load Failed</h2><pre>' + e.message + '</pre></div>';
+            }
+        }
 
         // ============ DOM ELEMENTS ============
         const appContainer = document.getElementById('app');
@@ -1039,6 +1122,7 @@
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
         const contextInfo = document.getElementById('context-info');
+        const cloudBadge = document.getElementById('cloud-badge');
         const solutionsPanel = document.getElementById('solutions-panel');
         const emptyState = document.getElementById('empty-state');
         const transcriptContainer = document.getElementById('transcript-container');
@@ -1102,6 +1186,7 @@
 
         function showSetupModal() {
             console.log('[setup] show (first-run, but skippable)');
+            ipcRenderer.send('set-focusable', true);  // Need keyboard for input fields
             applyProviderDefaults();
             // First-run gets a "Skip for now" button; if the user dismisses,
             // the app idles in queued mode and they can come back via ⚙ Settings.
@@ -1147,6 +1232,7 @@
             setupCancelBtn.textContent = 'Cancel';
             setupCancelBtn.style.display = '';        // edit-flow has Cancel
             setupModal.classList.add('visible');
+            ipcRenderer.send('set-focusable', true);  // Need keyboard for input fields
             setupModal.scrollTop = 0;                 // start the (possibly scrolling) overlay at the top
             // No auto-focus — focusing setupServerUrl on a tall modal can scroll-jank on Mac/WebKit.
         }
@@ -1156,6 +1242,7 @@
             setupModal.classList.remove('visible');
             setupError.classList.remove('visible');
             setupStatus.textContent = '';
+            ipcRenderer.send('set-focusable', false);  // Back to non-focusable
         }
 
         setupProvider.addEventListener('change', () => {
@@ -1324,14 +1411,16 @@
                 modeBadge.className = 'mode-badge ghost';
 
                 ipcRenderer.send('set-ghost-mode', true);
-                appContainer.style.opacity = '0'; // DEEP STEALTH: Invisible by default
+                // Ghost mode keeps window VISIBLE but click-through
+                // The CSS class 'ghost-mode' sets opacity to 0.55
+                appContainer.style.opacity = '';  // Let CSS handle it
                 
                 // Deep Stealth: Stop background capture to hide OS indicators
                 if (socket && socket.connected) {
                     socket.emit('set_stealth_mode', { enabled: true });
                 }
                 
-                console.log('👻 Ghost Mode ON - Press Right-Shift to PEEK, ⌘⇧L to exit!');
+                console.log('👻 Ghost Mode ON - Click-through active, press ⌘⇧L to exit!');
             } else {
                 // GHOST MODE OFF (Interactive)
                 appContainer.classList.remove('ghost-mode');
@@ -1377,19 +1466,16 @@
         });
 
         // ============ DEEP GHOST (PEEK) LOGIC ============
+        // In ghost mode, holding Right-Shift boosts opacity for easier reading
         document.addEventListener('keydown', (e) => {
             if (ghostMode && (e.code === 'ShiftRight' || e.key === 'Shift')) {
-                // Peek: Show UI while holding shift
-                appContainer.style.opacity = '0.9';
-                ipcRenderer.send('set-ignore-mouse-events', false); // Enable clicks
+                appContainer.style.opacity = '0.95';
             }
         });
 
         document.addEventListener('keyup', (e) => {
             if (ghostMode && (e.code === 'ShiftRight' || e.key === 'Shift')) {
-                // Hide again
-                appContainer.style.opacity = '0'; // Fully invisible
-                ipcRenderer.send('set-ignore-mouse-events', true, { forward: true }); // Click-through
+                appContainer.style.opacity = '';  // Back to CSS default (0.55)
             }
         });
 
@@ -1463,6 +1549,8 @@
                 connectionAttempts = 0;
                 statusDot.className = 'status-dot connected';
                 transcriptionHeader.classList.add('active');
+                // Show the "Live" cloud badge — backend is up and bridging to Cloud Run
+                cloudBadge.classList.add('visible');
                 // If the user clicked Save / Test before the backend was up,
                 // their action was queued — flush it now.
                 flushPendingSetup();
@@ -1479,6 +1567,7 @@
                 statusDot.className = 'status-dot';
                 statusText.textContent = 'Reconnecting...';
                 transcriptionHeader.classList.remove('active');
+                cloudBadge.classList.remove('visible');
             });
 
             socket.on('connect_error', (error) => {
@@ -1682,11 +1771,18 @@
             if (!text) return '<p style="color: var(--text-muted);">No response.</p>';
 
             return text
-                .replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) =>
-                    `<pre><code>${code.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`)
+                // Fenced code blocks with optional language tag
+                .replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+                    const langLabel = lang ? `<div style="font-size:9px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">${lang}</div>` : '';
+                    return `<pre>${langLabel}<code>${code.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`;
+                })
                 .replace(/`([^`]+)`/g, '<code>$1</code>')
                 .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                // Horizontal rules
+                .replace(/^-{3,}$/gm, '<hr style="border:none;border-top:1px solid var(--border-color);margin:12px 0;">')
+                // Ordered list items (e.g. "1. foo")
+                .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="padding-left:16px;margin:2px 0;"><span style="color:var(--accent-blue);font-weight:600;">$1.</span> $2</div>')
                 .replace(/\n/g, '<br>');
         }
 
@@ -1735,6 +1831,11 @@
             if (socket?.connected) {
                 statusText.textContent = 'Capturing...';
                 showLoading();
+                // Visual capture flash
+                const flash = document.createElement('div');
+                flash.className = 'capture-flash';
+                document.body.appendChild(flash);
+                setTimeout(() => flash.remove(), 300);
                 // Use Python capture (more reliable with macOS permissions)
                 socket.emit('trigger_vision', {});
             }
@@ -1818,6 +1919,11 @@
             if (socket?.connected) {
                 statusText.textContent = 'Capturing...';
                 showLoading();
+                // Visual capture flash
+                const flash = document.createElement('div');
+                flash.className = 'capture-flash';
+                document.body.appendChild(flash);
+                setTimeout(() => flash.remove(), 300);
                 socket.emit('trigger_vision', {});
             }
         });
